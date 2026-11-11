@@ -2,6 +2,7 @@ import { assert, assertEquals } from "@std/assert";
 import type { ResultadoFerramenta } from "../mcp/servidor.ts";
 import { atender } from "./agente.ts";
 import { interpretarWebhook } from "./chatwoot.ts";
+import { dividir, LIMITE_TURNOS, resumir, TURNOS_MANTIDOS } from "./contexto.ts";
 import type { ClienteModelo, MensagemModelo, RespostaModelo } from "./modelo.ts";
 import { type ConfigAtendimento, decidirSemModelo } from "./roteador.ts";
 
@@ -253,4 +254,62 @@ Deno.test("agente: histórico vira contexto e orientações da empresa entram no
   assertEquals(m.map((x) => x.role), ["system", "user", "assistant", "user"]);
   assert(m[0].content.includes("Trate por você."));
   assertEquals(m.at(-1)?.content, "Que horas abre?");
+});
+
+// Contexto ----------------------------------------------------------------------
+
+const turnos = (n: number) =>
+  Array.from({ length: n }, (_, i) => ({
+    id: String(i + 1),
+    autor: i % 2 ? "agente" as const : "cliente" as const,
+    texto: `turno ${i + 1}`,
+  }));
+
+Deno.test("contexto: conversa curta segue inteira; longa separa antigos e recentes", () => {
+  const curta = dividir(turnos(LIMITE_TURNOS));
+  assertEquals([curta.antigos.length, curta.recentes.length], [0, LIMITE_TURNOS]);
+
+  const longa = dividir(turnos(LIMITE_TURNOS + 1));
+  assertEquals(longa.recentes.length, TURNOS_MANTIDOS);
+  assertEquals(longa.antigos.length, LIMITE_TURNOS + 1 - TURNOS_MANTIDOS);
+  assertEquals(longa.antigos.at(-1)?.id, String(LIMITE_TURNOS + 1 - TURNOS_MANTIDOS));
+  assertEquals(longa.recentes.at(-1)?.texto, `turno ${LIMITE_TURNOS + 1}`);
+});
+
+Deno.test("contexto: resumo sem ferramentas, levando o resumo anterior", async () => {
+  const { modelo, pedidos } = roteiro({ "teste/barato": [fala("  Cliente quer tinta.  ")] });
+  const r = await resumir(modelo, "teste/barato", "Cliente se chama Maria.", [
+    { autor: "cliente", texto: "tem tinta?" },
+    { autor: "humano", texto: "Tem sim." },
+  ]);
+  assertEquals(r.texto, "Cliente quer tinta.");
+  assertEquals(r.uso.custo_usd, 0.001);
+  assertEquals(pedidos[0].ferramentas, []);
+  const corpo = pedidos[0].mensagens[1].content;
+  assert(corpo.includes("Resumo até aqui:\nCliente se chama Maria."));
+  assert(corpo.includes("Cliente: tem tinta?\nAtendimento (pessoa): Tem sim."));
+});
+
+Deno.test("contexto: resumo vazio é falha, não resumo", async () => {
+  const vazio = roteiro({ "teste/barato": [fala("   ")] });
+  let mensagem = "";
+  try {
+    await resumir(vazio.modelo, "teste/barato", null, [{ autor: "cliente", texto: "oi" }]);
+  } catch (e) {
+    mensagem = (e as Error).message;
+  }
+  assertEquals(mensagem, "resumo vazio");
+});
+
+Deno.test("agente: resumo entra em mensagem própria, depois do prompt estável", async () => {
+  const semResumo = roteiro({ "teste/barato": [fala("Ok.")] });
+  await atender(pedido(semResumo.modelo));
+  const comResumo = roteiro({ "teste/barato": [fala("Ok.")] });
+  await atender({ ...pedido(comResumo.modelo), resumo: "Cliente quer tinta branca." });
+
+  const m = comResumo.pedidos[0].mensagens;
+  assertEquals(m.map((x) => x.role), ["system", "system", "user"]);
+  assert(m[1].content.includes("Cliente quer tinta branca."));
+  // O primeiro bloco é idêntico com e sem resumo: continua servindo de prefixo de cache.
+  assertEquals(m[0].content, semResumo.pedidos[0].mensagens[0].content);
 });

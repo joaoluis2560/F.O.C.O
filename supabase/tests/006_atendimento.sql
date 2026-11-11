@@ -4,7 +4,7 @@ begin;
 
 create extension if not exists pgtap with schema extensions;
 
-select plan(34);
+select plan(36);
 
 select testes.fixtures();
 
@@ -181,6 +181,12 @@ select atendimento.concluir_lote(
   (select array_agg(id) from atendimento.mensagens where externa_id = 'd1'), 'concluida'
 );
 
+select throws_ok(
+  $$update atendimento.conversas set resumo = 'x' where conversa_externa = '20'$$,
+  '23514', null,
+  'resumo sem marcar até onde vai é recusado'
+);
+
 -- Humano assume ---------------------------------------------------------------
 
 select atendimento.receber_mensagem(testes.id('a'), 'a3000000-0000-0000-0000-000000000000',
@@ -212,6 +218,11 @@ select results_eq(
   'select distinct tenant_id from atendimento.mensagens',
   array[testes.id('a')],
   'owner A só enxerga mensagens do Tenant A'
+);
+select results_eq(
+  'select distinct tenant_id from atendimento.conversas',
+  array[testes.id('a')],
+  'owner A só enxerga conversas (e resumos) do Tenant A'
 );
 select throws_ok(
   'select hash from atendimento.canais', '42501', null,

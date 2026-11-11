@@ -42,6 +42,8 @@ export interface PedidoAgente {
   ferramentas: Ferramenta[];
   executar: (nome: string, argumentos: unknown) => Promise<ResultadoFerramenta>;
   historico: Turno[];
+  /** Resumo dos turnos mais antigos, quando a conversa é longa. */
+  resumo?: string | null;
   texto: string;
 }
 
@@ -119,6 +121,15 @@ async function rodarNivel(
   ];
   const mensagens: MensagemModelo[] = [
     { role: "system", content: instrucoes(p.config, nivel) },
+    // Em mensagem separada: o prompt acima continua sendo um prefixo estável para cache.
+    ...(p.resumo
+      ? [{
+        role: "system" as const,
+        content:
+          `Resumo do início desta conversa (as mensagens seguintes são as mais recentes):\n` +
+          p.resumo,
+      }]
+      : []),
     ...p.historico.map((t): MensagemModelo =>
       t.autor === "cliente"
         ? { role: "user", content: t.texto }

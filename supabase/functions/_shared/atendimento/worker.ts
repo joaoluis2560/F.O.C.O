@@ -4,9 +4,10 @@
 import type { Catalogo } from "../conectores/tipos.ts";
 import type { Credencial, Repositorio } from "../mcp/repositorio.ts";
 import { executarFerramenta, ferramentasDe } from "../mcp/servidor.ts";
-import { atender } from "./agente.ts";
+import { atender, type Turno } from "./agente.ts";
 import type { ClienteCanal } from "./chatwoot.ts";
-import type { ClienteModelo } from "./modelo.ts";
+import { dividir, resumir } from "./contexto.ts";
+import { type ClienteModelo, type Uso, USO_ZERO } from "./modelo.ts";
 import {
   type Canal,
   execucaoDePasso,
@@ -14,7 +15,7 @@ import {
   type RegistroExecucao,
   type RepositorioAtendimento,
 } from "./repositorio.ts";
-import { decidirSemModelo } from "./roteador.ts";
+import { type ConfigAtendimento, decidirSemModelo } from "./roteador.ts";
 
 export interface DependenciasWorker {
   repo: RepositorioAtendimento;
@@ -72,6 +73,44 @@ async function entregar(
     await canal.transferir(lote.conversa_externa);
   }
   return true;
+}
+
+/**
+ * Histórico que segue para o agente. Se a conversa passou do limite, resume os
+ * turnos antigos com o modelo barato e guarda o resumo. Falha ao resumir não
+ * impede o atendimento: seguem só os turnos recentes, e tenta-se de novo depois.
+ */
+async function prepararContexto(
+  d: DependenciasWorker,
+  lote: Lote,
+  config: ConfigAtendimento,
+  sombra: boolean,
+): Promise<{ resumo: string | null; historico: Turno[] }> {
+  const { tenant_id, conversa_id } = lote;
+  const { resumo, turnos } = await d.repo.contexto(tenant_id, conversa_id);
+  const { antigos, recentes } = dividir(turnos);
+  if (antigos.length === 0) return { resumo, historico: recentes };
+
+  const inicio = performance.now();
+  const registrar = (resultado: string, uso: Uso, motivo: string) =>
+    d.repo.registrarExecucao(tenant_id, conversa_id, sombra, {
+      nivel: 1,
+      modelo: config.modelo_barato,
+      motivo,
+      ...uso,
+      duracao_ms: Math.round(performance.now() - inicio),
+      resultado,
+    });
+  try {
+    const novo = await resumir(d.modelo, config.modelo_barato, resumo, antigos);
+    await d.repo.salvarResumo(tenant_id, conversa_id, novo.texto, antigos[antigos.length - 1].id);
+    await registrar("resumiu", novo.uso, "resumo_de_contexto");
+    return { resumo: novo.texto, historico: recentes };
+  } catch (erro) {
+    const motivo = erro instanceof Error ? erro.message.slice(0, 120) : "erro";
+    await registrar("falhou", USO_ZERO, `resumo_de_contexto: ${motivo}`);
+    return { resumo, historico: recentes };
+  }
 }
 
 /** Processa um lote. Devolve null quando a fila está vazia. */
@@ -143,12 +182,14 @@ export async function processarProximoLote(d: DependenciasWorker): Promise<Resul
     // Identidade do cliente: o telefone veio do canal, não do modelo.
     const cred: Credencial = { credencial_id: "agente", tenant_id, perfil: "atendimento" };
     const nucleo = { repo: d.nucleo, catalogo: d.catalogo };
+    const contexto = await prepararContexto(d, lote, config, sombra);
     const desfecho = await atender({
       modelo: d.modelo,
       config,
       ferramentas: await ferramentasDe(nucleo, cred),
       executar: (nome, args) => executarFerramenta(nucleo, cred, lote.contato, nome, args),
-      historico: await d.repo.historico(tenant_id, conversa_id),
+      historico: contexto.historico,
+      resumo: contexto.resumo,
       texto: lote.texto,
     });
 

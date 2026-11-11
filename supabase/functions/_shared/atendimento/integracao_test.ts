@@ -10,7 +10,8 @@ import { hashDefinicao } from "../conectores/executor.ts";
 import type { Catalogo } from "../conectores/tipos.ts";
 import { criarRepositorioPg } from "../mcp/repositorio_pg.ts";
 import type { ClienteCanal } from "./chatwoot.ts";
-import type { ClienteModelo, RespostaModelo } from "./modelo.ts";
+import { LIMITE_TURNOS, TURNOS_MANTIDOS } from "./contexto.ts";
+import type { ClienteModelo, MensagemModelo, RespostaModelo } from "./modelo.ts";
 import { criarRepositorioAtendimento } from "./repositorio.ts";
 import { processarProximoLote } from "./worker.ts";
 
@@ -41,10 +42,14 @@ Deno.test({
 
     // Modelo roteirizado, com registro das ferramentas oferecidas e dos resultados vistos.
     const fila: RespostaModelo[] = [];
-    const visto: { modelo: string; ultima: string }[] = [];
+    const visto: { modelo: string; ultima: string; mensagens: MensagemModelo[] }[] = [];
     const uso = { tokens_entrada: 500, tokens_cache: 0, tokens_saida: 40, custo_usd: 0.0004 };
     const modelo: ClienteModelo = ({ modelo, mensagens }) => {
-      visto.push({ modelo, ultima: mensagens.at(-1)!.content });
+      visto.push({
+        modelo,
+        ultima: mensagens.at(-1)!.content,
+        mensagens: structuredClone(mensagens),
+      });
       const r = fila.shift();
       return r ? Promise.resolve(r) : Promise.reject(new Error("roteiro vazio"));
     };
@@ -63,6 +68,12 @@ Deno.test({
       canal: () => clienteCanal,
       espera_seg: 0,
     };
+
+    // O disparo automático do ambiente local pegaria as mensagens deste teste.
+    // Fica pausado durante o teste e volta ao estado anterior no final.
+    const [agendador] = await sql`
+      select jobid, active from cron.job where jobname = 'foco-atendimento-worker'`;
+    if (agendador?.active) await sql`select cron.alter_job(${agendador.jobid}, active := false)`;
 
     try {
       const [tenant] = await sql`
@@ -112,6 +123,15 @@ Deno.test({
       await sql`
         insert into atendimento.config (tenant_id, modo, modelo_barato, modelo_forte)
         values (${tenant.id}, 'producao', 'teste/barato', 'teste/forte')`;
+
+      // Regressão: o histórico já foi ordenado pelo id como texto, o que embaralhava
+      // a conversa quando os ids mudavam de número de dígitos (99 -> 100). O teste
+      // posiciona a sequência logo antes de uma dessas viradas.
+      const [{ atual }] = await sql`
+        select nextval(pg_get_serial_sequence('atendimento.mensagens', 'id'))::int as atual`;
+      const virada = 10 ** String(atual + 2).length;
+      await sql`
+        select setval(pg_get_serial_sequence('atendimento.mensagens', 'id'), ${virada - 2})`;
 
       const canalId = await repo.identificarCanal(hashCanal);
       assert(canalId);
@@ -174,14 +194,18 @@ Deno.test({
         assert(!visto[2].ultima.includes("T-3"));
       });
 
+      const conversaId = async (externa: string) =>
+        (await sql`select id from atendimento.conversas
+                   where tenant_id = ${tenant.id} and conversa_externa = ${externa}`)[0].id;
+
       await t.step("histórico da conversa acompanha o próximo pedido", async () => {
-        const historico = await repo.historico(
-          tenant.id,
-          (await sql`
-          select id from atendimento.conversas where tenant_id = ${tenant.id}
-            and conversa_externa = '100'`)[0].id,
-        );
-        assertEquals(historico.slice(0, 3).map((h) => [h.autor, h.texto]), [
+        const { resumo, turnos } = await repo.contexto(tenant.id, await conversaId("100"));
+        assertEquals(resumo, null);
+        // Os ids desta conversa cruzam uma virada de dígitos e a ordem se mantém.
+        const ids = turnos.map((h) => Number(h.id));
+        assert(ids[0] < virada && ids.at(-1)! >= virada, `ids ${ids[0]}..${ids.at(-1)}`);
+        assertEquals(ids, [...ids].sort((a, b) => a - b));
+        assertEquals(turnos.slice(0, 3).map((h) => [h.autor, h.texto]), [
           ["cliente", "Oi"],
           ["cliente", "que horas vocês abrem?"],
           ["agente", "Abrimos às 8h."],
@@ -292,6 +316,91 @@ Deno.test({
         },
       );
 
+      await t.step("conversa longa: turnos antigos viram resumo antes de atender", async () => {
+        await chega("700", "5511999990007", "primeira mensagem");
+        fila.push(fala("Olá!"));
+        await processarProximoLote(deps);
+        const id = await conversaId("700");
+        // Histórico longo, gravado direto: 20 turnos além dos 2 que já existem.
+        for (let i = 1; i <= 20; i++) {
+          await sql`
+            insert into atendimento.mensagens (tenant_id, conversa_id, direcao, autor, texto)
+            values (${tenant.id}, ${id}, ${i % 2 ? "entrada" : "saida"},
+                    ${i % 2 ? "cliente" : "agente"}, ${`turno ${i}`})`;
+        }
+        const totalAntes = 22;
+        assert(totalAntes > LIMITE_TURNOS);
+
+        visto.length = 0;
+        await chega("700", "5511999990007", "e o prazo de entrega?");
+        fila.push(
+          fala("Cliente pediu tinta branca; informado preço de R$ 289."),
+          fala("2 dias úteis."),
+        );
+        const r = await processarProximoLote(deps);
+        assertEquals(r?.acao, "responder");
+
+        // Primeira chamada: o resumo, com os turnos antigos e só eles.
+        const pedidoResumo = visto[0].mensagens;
+        assert(pedidoResumo[0].content.includes("resumo de uma conversa"));
+        assert(pedidoResumo[1].content.includes("Cliente: primeira mensagem"));
+        assert(pedidoResumo[1].content.includes(`turno ${totalAntes - TURNOS_MANTIDOS - 2}\n`));
+        assert(!pedidoResumo[1].content.includes(`turno ${totalAntes - TURNOS_MANTIDOS - 1}\n`));
+
+        // Segunda chamada: o agente recebe o resumo e só os turnos recentes.
+        const pedidoAgente = visto[1].mensagens;
+        assertEquals(pedidoAgente[1].role, "system");
+        assert(pedidoAgente[1].content.includes("Cliente pediu tinta branca"));
+        assertEquals(pedidoAgente.length, 2 + TURNOS_MANTIDOS + 1);
+        assertEquals(pedidoAgente.at(-1)?.content, "e o prazo de entrega?");
+
+        const [conversa] = await sql`
+          select resumo from atendimento.conversas where id = ${id}`;
+        assertEquals(conversa.resumo, "Cliente pediu tinta branca; informado preço de R$ 289.");
+        const ultimas = (await execucoes()).slice(-2).map((e) => [e.motivo, e.resultado]);
+        assertEquals(ultimas, [
+          ["resumo_de_contexto", "resumiu"],
+          ["primeiro_atendimento", "respondeu"],
+        ]);
+
+        // Depois do resumo, o contexto guardado é o resumo mais os turnos que vieram depois.
+        const depois = await repo.contexto(tenant.id, id);
+        assertEquals(depois.turnos.length, TURNOS_MANTIDOS + 2);
+      });
+
+      await t.step("mensagem seguinte reaproveita o resumo, sem resumir de novo", async () => {
+        visto.length = 0;
+        await chega("700", "5511999990007", "obrigado");
+        fila.push(fala("De nada!"));
+        await processarProximoLote(deps);
+        assertEquals(visto.length, 1);
+        assert(visto[0].mensagens[1].content.includes("Cliente pediu tinta branca"));
+      });
+
+      await t.step("falha ao resumir não impede o atendimento", async () => {
+        await chega("800", "5511999990008", "oi");
+        fila.push(fala("Olá!"));
+        await processarProximoLote(deps);
+        const id = await conversaId("800");
+        for (let i = 1; i <= 20; i++) {
+          await sql`
+            insert into atendimento.mensagens (tenant_id, conversa_id, direcao, autor, texto)
+            values (${tenant.id}, ${id}, 'entrada', 'cliente', ${`turno ${i}`})`;
+        }
+        visto.length = 0;
+        await chega("800", "5511999990008", "ainda está aí?");
+        // Resposta vazia para o resumo; depois o agente responde normalmente.
+        fila.push(fala("  "), fala("Estou sim."));
+        const r = await processarProximoLote(deps);
+        assertEquals(r?.acao, "responder");
+        const [conversa] = await sql`select resumo from atendimento.conversas where id = ${id}`;
+        assertEquals(conversa.resumo, null);
+        // Sem resumo: seguem só os turnos recentes.
+        assertEquals(visto[1].mensagens.length, 1 + TURNOS_MANTIDOS + 1);
+        const ultimas = (await execucoes()).slice(-2).map((e) => [e.resultado, e.motivo]);
+        assertEquals(ultimas[0], ["falhou", "resumo_de_contexto: resumo vazio"]);
+      });
+
       await t.step("nada ficou preso na fila", async () => {
         const [{ presas }] = await sql`
           select count(*)::int as presas from atendimento.mensagens
@@ -300,6 +409,7 @@ Deno.test({
         assertEquals(await processarProximoLote(deps), null);
       });
     } finally {
+      if (agendador?.active) await sql`select cron.alter_job(${agendador.jobid}, active := true)`;
       await sql`delete from nucleo.tenants where slug = ${`itest-at-${sufixo}`}`;
       await sql`delete from vault.secrets where name like ${`itest-at-%-${sufixo}`}`;
       await sql.end({ timeout: 2 });

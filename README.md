@@ -101,12 +101,17 @@ entra na fila e é processada pelo worker (`/functions/v1/atendimento-worker`):
 5. Entrega: no modo `sombra` vira nota interna para a equipe; no modo `producao` vai ao cliente.
    Cada decisão fica em `atendimento.execucoes`, com tokens e custo.
 
+Conversa longa não é reenviada inteira: passando de 16 turnos, os mais antigos são resumidos
+pelo modelo barato e o resumo fica guardado na conversa; os 8 mais recentes seguem inteiros. Se
+o resumo falhar, o atendimento continua só com os recentes.
+
 O telefone do cliente vem do canal, nunca do modelo. O agente só consulta; pedido, cancelamento
 e reclamação são transferidos.
 
 ```bash
 deno task simular                 # 8 perguntas de cliente, modelo real, canal falso, com custo
 deno task simular "sua pergunta"  # uma pergunta
+deno task simular longa           # conversa de 20 turnos: testa o resumo de contexto
 ```
 
 A simulação usa `OPENROUTER_API_KEY` de `piloto/hermes/.env` e a empresa de exemplo

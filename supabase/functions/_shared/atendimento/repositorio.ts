@@ -4,7 +4,8 @@
 
 // @ts-types="npm:postgres@3.4.5"
 import postgres from "postgres";
-import type { Passo, Turno } from "./agente.ts";
+import type { Passo } from "./agente.ts";
+import type { TurnoGuardado } from "./contexto.ts";
 import type { ConfigAtendimento } from "./roteador.ts";
 
 export interface Canal {
@@ -129,16 +130,35 @@ export function criarRepositorioAtendimento(url: string) {
       };
     },
 
-    /** Últimos turnos já concluídos da conversa, do mais antigo para o mais novo. */
-    async historico(tenantId: string, conversaId: string, limite = 12): Promise<Turno[]> {
-      const linhas = await sql<Turno[]>`
-        select autor, texto from (
+    /**
+     * Resumo guardado e os turnos concluídos que vieram depois dele, do mais
+     * antigo para o mais novo.
+     */
+    async contexto(tenantId: string, conversaId: string, limite = 200): Promise<{
+      resumo: string | null;
+      turnos: TurnoGuardado[];
+    }> {
+      const [conversa] = await sql<{ resumo: string | null; resumo_ate: string | null }[]>`
+        select resumo, resumo_ate from atendimento.conversas
+        where id = ${conversaId} and tenant_id = ${tenantId}`;
+      const turnos = await sql<TurnoGuardado[]>`
+        select id::text as id, autor, texto from (
           select id, autor, texto from atendimento.mensagens
           where conversa_id = ${conversaId} and tenant_id = ${tenantId}
             and estado = 'concluida' and texto <> ''
+            and id > ${conversa?.resumo_ate ?? 0}
           order by id desc limit ${limite}
-        ) recentes order by id`;
-      return [...linhas];
+        ) recentes
+        -- Qualificado de propósito: só "id" seria a coluna de saída, que é texto,
+        -- e a ordem viraria alfabética ("10" antes de "9").
+        order by recentes.id`;
+      return { resumo: conversa?.resumo ?? null, turnos: [...turnos] };
+    },
+
+    async salvarResumo(tenantId: string, conversaId: string, resumo: string, ate: string) {
+      await sql`
+        update atendimento.conversas set resumo = ${resumo}, resumo_ate = ${ate}
+        where id = ${conversaId} and tenant_id = ${tenantId}`;
     },
 
     async registrarSaida(tenantId: string, conversaId: string, texto: string) {
