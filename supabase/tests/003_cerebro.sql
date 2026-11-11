@@ -4,7 +4,7 @@ begin;
 
 create extension if not exists pgtap with schema extensions;
 
-select plan(33);
+select plan(36);
 
 select testes.fixtures();
 
@@ -246,6 +246,23 @@ select is_empty(
   'owner A não enxerga o grafo do Tenant B'
 );
 reset role;
+
+-- Exclusão ------------------------------------------------------------------
+
+select lives_ok(
+  format($$delete from cerebro.fatos where id = %L$$, (select id from ids where nome = 'frete')),
+  'excluir um fato funciona'
+);
+select is(
+  (select acao from cerebro.revisoes
+   where fato_id = (select id from ids where nome = 'frete') order by id desc limit 1),
+  'excluir',
+  'exclusão de fato fica na trilha de revisões'
+);
+select lives_ok(
+  format($$delete from nucleo.tenants where id = %L$$, testes.id('a')),
+  'excluir um tenant com fatos funciona (cascata não quebra a auditoria)'
+);
 
 select * from finish();
 

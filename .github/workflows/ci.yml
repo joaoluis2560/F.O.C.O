@@ -42,3 +42,8 @@ jobs:
         run: supabase db start
       - run: supabase db lint --level warning --fail-on warning
       - run: supabase test db
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
+      - name: MCP de ponta a ponta contra o banco local
+        run: deno task integracao

@@ -34,7 +34,7 @@ const a = parseArgs(Deno.args, {
     "modelo",
   ],
   boolean: ["permite-http", "testar-escrita"],
-  default: { auth: "nenhuma", catalogo: "catalogo/capacidades.json" },
+  default: { auth: "nenhuma", catalogo: "supabase/functions/_shared/catalogo/capacidades.json" },
 });
 
 function exigir(nome: "openapi" | "base-url" | "saida"): string {

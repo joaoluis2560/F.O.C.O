@@ -7,7 +7,9 @@ import type { Capacidade, Catalogo, DefinicaoConector, Integracao } from "./tipo
 const raiz = new URL("../../../../", import.meta.url);
 
 export async function carregarCatalogo(): Promise<Map<string, Capacidade>> {
-  const texto = await Deno.readTextFile(new URL("catalogo/capacidades.json", raiz));
+  const texto = await Deno.readTextFile(
+    new URL("supabase/functions/_shared/catalogo/capacidades.json", raiz),
+  );
   const catalogo = JSON.parse(texto) as Catalogo;
   return new Map(catalogo.capacidades.map((c) => [c.nome, c]));
 }

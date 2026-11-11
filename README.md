@@ -18,6 +18,10 @@ Arquitetura, decisões e fases: [docs/plano.md](docs/plano.md).
   obrigatória antes de um fato chegar ao cliente, pacote de domínio inicial
   (`catalogo/pacotes/base.json`) e ingestão de material com Claude.
 
+- **Fase 3A (servidor MCP):** Edge Function `mcp` que expõe o cérebro e os
+  conectores de leitura a agentes externos, com token por tenant e dois perfis
+  (`atendimento` e `equipe`).
+
 ## Requisitos
 
 - [Supabase CLI](https://supabase.com/docs/guides/cli) 2.116+
@@ -52,6 +56,30 @@ deno task construtor \
   --saida rascunhos/erp-simulado
 ```
 
+### Servidor MCP
+
+Um agente (o runtime de atendimento, ou uma instância Hermes por empresa) fala
+com o F.O.C.O por MCP sobre HTTP, em `/functions/v1/mcp`, com
+`Authorization: Bearer <token>`. O token define o tenant e o perfil:
+
+| Perfil | Cérebro | Sistema de gestão |
+|---|---|---|
+| `atendimento` | só fatos públicos | consultas presas ao cliente da conversa, identificado por uma sessão (`x-foco-sessao`) |
+| `equipe` | públicos e internos | identifica o cliente pelo telefone e consulta com o `cliente_id` |
+
+A sessão de atendimento é aberta no banco pela entrada do canal, que é quem
+sabe de qual telefone a mensagem veio (`nucleo.abrir_sessao_atendimento`). O
+agente recebe só um token opaco de vida curta. O token de atendimento sozinho
+não dá acesso a dados de cliente, e telefone informado por quem chama é recusado.
+
+Capacidades de escrita não são expostas: dependem do fluxo de aprovação humana.
+
+```bash
+deno task credencial --tenant <uuid> --nome hermes --perfil equipe   # gera token e SQL do hash
+supabase start           # banco + gateway + runtime de funções
+deno task integracao     # MCP de ponta a ponta contra o banco local
+```
+
 ## Regras do repositório
 
 - Trabalho só em ambiente local ou staging. Migrations são criadas e testadas
@@ -65,12 +93,16 @@ deno task construtor \
 ## Estrutura
 
 ```
-catalogo/                      capacidades canônicas (o que o agente enxerga)
+catalogo/pacotes/              pacotes de domínio (perguntas de implantação)
 supabase/migrations/           schema versionado
 supabase/tests/                testes pgTAP
 supabase/seed.sql              auxiliares de teste (local e CI)
 supabase/functions/_shared/    código das Edge Functions (Deno)
+  catalogo/                    capacidades canônicas (o que o agente enxerga)
   conectores/                  executor, proteção SSRF, tipos
+  cerebro/                     pacote de domínio e ingestão de material
+  mcp/                         servidor MCP e acesso a dados
+supabase/functions/mcp/        Edge Function do servidor MCP
 ferramentas/construtor/        gera e testa rascunhos de conector
 ferramentas/erp-simulado/      sistema falso, OpenAPI e conectores de referência
 docs/                          plano e documentação
