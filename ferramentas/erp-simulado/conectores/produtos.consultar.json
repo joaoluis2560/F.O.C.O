@@ -1,0 +1,10 @@
+{
+  "requisicao": {
+    "metodo": "GET",
+    "caminho": "/api/v1/products",
+    "query": { "q": "{{entrada.termo}}" }
+  },
+  "resposta": {
+    "mapeamento": "{ \"itens\": [items.{ \"produto_id\": sku, \"nome\": title, \"preco\": price_cents / 100, \"unidade\": unit }] }"
+  }
+}

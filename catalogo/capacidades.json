@@ -1,0 +1,185 @@
+{
+  "versao": 1,
+  "capacidades": [
+    {
+      "nome": "clientes.identificar",
+      "dominio": "clientes",
+      "tipo": "leitura",
+      "identidade": "nenhuma",
+      "descricao": "Localiza o cadastro do cliente pelo telefone de quem está falando. O telefone é fornecido pelo servidor, nunca pelo modelo.",
+      "entrada": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["telefone"],
+        "properties": {
+          "telefone": { "type": "string", "pattern": "^[0-9]{10,15}$" }
+        }
+      },
+      "saida": {
+        "type": "object",
+        "required": ["encontrado"],
+        "properties": {
+          "encontrado": { "type": "boolean" },
+          "cliente_id": { "type": "string" },
+          "nome": { "type": "string" }
+        }
+      }
+    },
+    {
+      "nome": "produtos.consultar",
+      "dominio": "vendas",
+      "tipo": "leitura",
+      "identidade": "nenhuma",
+      "descricao": "Busca produtos ou serviços por nome e devolve preço e unidade.",
+      "entrada": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["termo"],
+        "properties": {
+          "termo": { "type": "string", "minLength": 2, "maxLength": 80 }
+        }
+      },
+      "saida": {
+        "type": "object",
+        "required": ["itens"],
+        "properties": {
+          "itens": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": ["produto_id", "nome", "preco"],
+              "properties": {
+                "produto_id": { "type": "string" },
+                "nome": { "type": "string" },
+                "preco": { "type": "number" },
+                "unidade": { "type": "string" }
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "nome": "estoque.consultar",
+      "dominio": "estoque",
+      "tipo": "leitura",
+      "identidade": "nenhuma",
+      "descricao": "Informa a quantidade disponível de um produto.",
+      "entrada": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["produto_id"],
+        "properties": {
+          "produto_id": { "type": "string", "minLength": 1, "maxLength": 64 }
+        }
+      },
+      "saida": {
+        "type": "object",
+        "required": ["produto_id", "disponivel"],
+        "properties": {
+          "produto_id": { "type": "string" },
+          "disponivel": { "type": "number" }
+        }
+      }
+    },
+    {
+      "nome": "pedidos.status",
+      "dominio": "vendas",
+      "tipo": "leitura",
+      "identidade": "cliente",
+      "descricao": "Lista os pedidos recentes do cliente identificado, com situação e valor.",
+      "entrada": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {}
+      },
+      "saida": {
+        "type": "object",
+        "required": ["pedidos"],
+        "properties": {
+          "pedidos": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": ["pedido_id", "situacao"],
+              "properties": {
+                "pedido_id": { "type": "string" },
+                "situacao": { "type": "string" },
+                "total": { "type": "number" },
+                "data": { "type": "string" }
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "nome": "financeiro.titulos_em_aberto",
+      "dominio": "financeiro",
+      "tipo": "leitura",
+      "identidade": "cliente",
+      "descricao": "Lista cobranças em aberto do cliente identificado, com vencimento e link de pagamento.",
+      "entrada": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {}
+      },
+      "saida": {
+        "type": "object",
+        "required": ["titulos"],
+        "properties": {
+          "titulos": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": ["titulo_id", "valor", "vencimento"],
+              "properties": {
+                "titulo_id": { "type": "string" },
+                "valor": { "type": "number" },
+                "vencimento": { "type": "string" },
+                "link_pagamento": { "type": "string" }
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "nome": "pedidos.criar",
+      "dominio": "vendas",
+      "tipo": "escrita",
+      "identidade": "cliente",
+      "descricao": "Cria um pedido para o cliente identificado. Exige aprovação humana antes de executar.",
+      "entrada": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["itens"],
+        "properties": {
+          "itens": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 50,
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["produto_id", "quantidade"],
+              "properties": {
+                "produto_id": { "type": "string", "minLength": 1, "maxLength": 64 },
+                "quantidade": { "type": "number", "exclusiveMinimum": 0 }
+              }
+            }
+          }
+        }
+      },
+      "saida": {
+        "type": "object",
+        "required": ["pedido_id", "situacao"],
+        "properties": {
+          "pedido_id": { "type": "string" },
+          "situacao": { "type": "string" },
+          "total": { "type": "number" }
+        }
+      }
+    }
+  ]
+}

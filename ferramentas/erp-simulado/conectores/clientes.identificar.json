@@ -1,0 +1,10 @@
+{
+  "requisicao": {
+    "metodo": "GET",
+    "caminho": "/api/v1/customers",
+    "query": { "phone": "{{entrada.telefone}}" }
+  },
+  "resposta": {
+    "mapeamento": "{ \"encontrado\": $count(data) > 0, \"cliente_id\": data[0].id, \"nome\": data[0].full_name }"
+  }
+}

@@ -1,0 +1,9 @@
+{
+  "requisicao": {
+    "metodo": "GET",
+    "caminho": "/api/v1/customers/{{contexto.cliente_id}}/orders"
+  },
+  "resposta": {
+    "mapeamento": "{ \"pedidos\": [orders.{ \"pedido_id\": number, \"situacao\": state, \"total\": total_cents / 100, \"data\": placed_at }] }"
+  }
+}

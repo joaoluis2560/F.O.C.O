@@ -1,0 +1,9 @@
+{
+  "requisicao": {
+    "metodo": "GET",
+    "caminho": "/api/v1/products/{{entrada.produto_id}}/stock"
+  },
+  "resposta": {
+    "mapeamento": "{ \"produto_id\": sku, \"disponivel\": on_hand - reserved }"
+  }
+}

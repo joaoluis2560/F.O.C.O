@@ -1,0 +1,10 @@
+{
+  "requisicao": {
+    "metodo": "POST",
+    "caminho": "/api/v1/orders",
+    "corpo_mapeamento": "{ \"customer_id\": contexto.cliente_id, \"lines\": [entrada.itens.{ \"sku\": produto_id, \"qty\": quantidade }] }"
+  },
+  "resposta": {
+    "mapeamento": "{ \"pedido_id\": number, \"situacao\": state, \"total\": total_cents / 100 }"
+  }
+}

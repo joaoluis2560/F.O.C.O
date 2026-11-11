@@ -1,0 +1,11 @@
+{
+  "clientes.identificar": { "entrada": { "telefone": "5511999990001" }, "contexto": {} },
+  "produtos.consultar": { "entrada": { "termo": "paraf" }, "contexto": {} },
+  "estoque.consultar": { "entrada": { "produto_id": "P-2" }, "contexto": {} },
+  "pedidos.status": { "entrada": {}, "contexto": { "cliente_id": "C-100" } },
+  "financeiro.titulos_em_aberto": { "entrada": {}, "contexto": { "cliente_id": "C-100" } },
+  "pedidos.criar": {
+    "entrada": { "itens": [{ "produto_id": "P-1", "quantidade": 10 }] },
+    "contexto": { "cliente_id": "C-100" }
+  }
+}
