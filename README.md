@@ -89,7 +89,7 @@ deno task integracao     # MCP de ponta a ponta contra o banco local
 
 ### Agente de atendimento
 
-Atende o cliente final. A mensagem chega pelo Chatwoot (`/functions/v1/chatwoot?t=<token do canal>`),
+Atende o cliente final. A mensagem chega pelo Chatwoot (`/functions/v1/chatwoot?c=<id do canal>`),
 entra na fila e é processada pelo worker (`/functions/v1/atendimento-worker`):
 
 1. Espera o cliente parar de digitar e junta as mensagens da conversa em um lote.
@@ -105,13 +105,30 @@ Conversa longa não é reenviada inteira: passando de 16 turnos, os mais antigos
 pelo modelo barato e o resumo fica guardado na conversa; os 8 mais recentes seguem inteiros. Se
 o resumo falhar, o atendimento continua só com os recentes.
 
-O telefone do cliente vem do canal, nunca do modelo. O agente só consulta; pedido, cancelamento
+Garantias da fila e da entrega:
+
+- **Origem do webhook:** o id do canal na URL não é segredo. A origem é provada pela assinatura
+  do Chatwoot (`X-Chatwoot-Signature`, HMAC sobre horário e corpo) com tolerância de 5 minutos.
+- **Um worker por conversa:** cada reivindicação tem um identificador; só quem o tem renova o
+  prazo, entrega e conclui. O prazo é renovado antes de cada chamada de modelo e de cada etapa
+  de entrega; quem perde a reivindicação para sem enviar nada.
+- **Sem resposta duplicada:** a decisão é gravada antes do envio (`atendimento.entregas`). Uma
+  nova tentativa retoma de onde parou, sem chamar o modelo de novo. Se o envio caiu no meio e
+  não se sabe se chegou, a mensagem não é reenviada e a equipe recebe um aviso.
+- **Teto diário de verdade:** cada chamada de modelo reserva um valor do teto antes de
+  acontecer e troca pelo custo real depois. Workers em paralelo não furam o teto.
+- **Resumo é dado:** o resumo da conversa segue para o agente como conteúdo de usuário
+  delimitado, nunca como mensagem de sistema.
+
+O telefone do cliente vem do canal, nunca do modelo. Se o webhook não o trouxer, é lido do
+próprio Chatwoot com a credencial do canal. O agente só consulta; pedido, cancelamento
 e reclamação são transferidos.
 
 ```bash
 deno task simular                 # 8 perguntas de cliente, modelo real, canal falso, com custo
 deno task simular "sua pergunta"  # uma pergunta
 deno task simular longa           # conversa de 20 turnos: testa o resumo de contexto
+deno task simular injecao         # cliente tenta plantar ordens no resumo
 ```
 
 A simulação usa `OPENROUTER_API_KEY` de `piloto/hermes/.env` e a empresa de exemplo

@@ -49,7 +49,10 @@ export interface Resumo {
   uso: Uso;
 }
 
-/** Atualiza o resumo com os turnos antigos. Lança se o modelo falhar ou devolver vazio. */
+/**
+ * Atualiza o resumo com os turnos antigos. Lança se o modelo falhar. Texto
+ * vazio é devolvido como está (com o custo da chamada): quem chama decide.
+ */
 export async function resumir(
   modelo: ClienteModelo,
   modeloId: string,
@@ -60,6 +63,9 @@ export async function resumir(
   const r = await modelo({
     modelo: modeloId,
     ferramentas: [],
+    // Modelos que raciocinam antes de responder gastam saída com isso; com
+    // pouco espaço o resumo sai vazio.
+    max_tokens: 3000,
     mensagens: [
       { role: "system", content: INSTRUCOES },
       {
@@ -69,7 +75,5 @@ export async function resumir(
       },
     ],
   });
-  const texto = r.texto.trim();
-  if (!texto) throw new Error("resumo vazio");
-  return { texto: texto.slice(0, MAX_RESUMO), uso: r.uso };
+  return { texto: r.texto.trim().slice(0, MAX_RESUMO), uso: r.uso };
 }

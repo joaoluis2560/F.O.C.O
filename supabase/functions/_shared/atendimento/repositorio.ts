@@ -8,6 +8,17 @@ import type { Passo } from "./agente.ts";
 import type { TurnoGuardado } from "./contexto.ts";
 import type { ConfigAtendimento } from "./roteador.ts";
 
+export interface Entrega {
+  id: string;
+  mensagem_ids: string[];
+  acao: "responder" | "transferir";
+  texto: string;
+  motivo: string;
+  sombra: boolean;
+  etapa: number;
+  em_andamento: boolean;
+}
+
 export interface Canal {
   canal_id: string;
   tenant_id: string;
@@ -26,6 +37,8 @@ export interface Lote {
   mensagem_ids: string[];
   texto: string;
   anexos: number;
+  /** Identifica esta reivindicação: só com ela se renova ou conclui o lote. */
+  reivindicacao: string;
 }
 
 export interface RegistroExecucao {
@@ -57,8 +70,12 @@ export function criarRepositorioAtendimento(url: string) {
   const sql = postgres(url, { prepare: false, max: 2, onnotice: () => {} });
 
   return {
-    async identificarCanal(hash: string): Promise<Canal | null> {
-      const [linha] = await sql<Canal[]>`select * from atendimento.identificar_canal(${hash})`;
+    /** Canal e segredo de assinatura para conferir um webhook. */
+    async canalDoWebhook(
+      canalId: string,
+    ): Promise<(Canal & { segredo_assinatura: string }) | null> {
+      const [linha] = await sql<(Canal & { segredo_assinatura: string })[]>`
+        select * from atendimento.canal_do_webhook(${canalId})`;
       return linha ?? null;
     },
 
@@ -95,20 +112,100 @@ export function criarRepositorioAtendimento(url: string) {
       return linha.nova;
     },
 
-    async reivindicarLote(esperaSeg: number, leaseSeg = 120): Promise<Lote | null> {
+    async reivindicarLote(esperaSeg: number, leaseSeg: number): Promise<Lote | null> {
       const [linha] = await sql<Lote[]>`
         select * from atendimento.reivindicar_lote(${esperaSeg}, ${leaseSeg})`;
       return linha ?? null;
     },
 
-    async concluirLote(ids: string[], estado: "concluida" | "ignorada" | "falhou") {
+    /** Falso quando o lote já não pertence a esta reivindicação. */
+    async renovarLote(ids: string[], reivindicacao: string, leaseSeg: number): Promise<boolean> {
+      const [linha] = await sql<{ ok: boolean }[]>`
+        select atendimento.renovar_lote(${ids}::bigint[], ${reivindicacao}, ${leaseSeg}) as ok`;
+      return linha.ok;
+    },
+
+    /** Falso quando o lote já não pertence a esta reivindicação. */
+    async concluirLote(
+      ids: string[],
+      reivindicacao: string,
+      estado: "concluida" | "ignorada" | "falhou",
+    ): Promise<boolean> {
+      const [linha] = await sql<{ ok: boolean }[]>`
+        select atendimento.concluir_lote(
+          ${ids}::bigint[], ${reivindicacao}, ${estado}::atendimento.estado_mensagem) as ok`;
+      return linha.ok;
+    },
+
+    async devolverLote(ids: string[], reivindicacao: string) {
+      await sql`select atendimento.devolver_lote(${ids}::bigint[], ${reivindicacao})`;
+    },
+
+    async salvarContato(tenantId: string, conversaId: string, contato: string) {
+      await sql`select atendimento.salvar_contato(${tenantId}, ${conversaId}, ${contato})`;
+    },
+
+    // Entregas: a decisão fica gravada antes do envio --------------------------
+
+    async buscarEntrega(
+      tenantId: string,
+      conversaId: string,
+      primeiraMensagemId: string,
+    ): Promise<Entrega | null> {
+      const [linha] = await sql<Entrega[]>`
+        select id, mensagem_ids::text[] as mensagem_ids, acao, texto, motivo, sombra, etapa,
+               em_andamento
+        from atendimento.entregas
+        where tenant_id = ${tenantId} and conversa_id = ${conversaId}
+          and primeira_mensagem_id = ${primeiraMensagemId} and concluida_em is null`;
+      return linha ?? null;
+    },
+
+    async criarEntrega(
+      tenantId: string,
+      conversaId: string,
+      mensagemIds: string[],
+      plano: { acao: "responder" | "transferir"; texto: string; motivo: string; sombra: boolean },
+    ): Promise<Entrega> {
+      const [linha] = await sql<{ id: string }[]>`
+        insert into atendimento.entregas
+          (tenant_id, conversa_id, primeira_mensagem_id, mensagem_ids, acao, texto, motivo, sombra)
+        values (${tenantId}, ${conversaId}, ${mensagemIds[0]}, ${mensagemIds}::bigint[],
+                ${plano.acao}, ${plano.texto.slice(0, 8000)}, ${plano.motivo.slice(0, 500)},
+                ${plano.sombra})
+        returning id`;
+      return { id: linha.id, mensagem_ids: mensagemIds, ...plano, etapa: 0, em_andamento: false };
+    },
+
+    async marcarEntrega(
+      id: string,
+      m: { etapa?: number; em_andamento?: boolean; incerta?: boolean; concluida?: boolean },
+    ) {
       await sql`
-        select atendimento.concluir_lote(${ids}::bigint[], ${estado}::atendimento.estado_mensagem)`;
+        update atendimento.entregas set
+          etapa = coalesce(${m.etapa ?? null}, etapa),
+          em_andamento = coalesce(${m.em_andamento ?? null}, em_andamento),
+          incerta = incerta or coalesce(${m.incerta ?? null}, false),
+          concluida_em = case when ${m.concluida ?? false} then now() else concluida_em end
+        where id = ${id}`;
+    },
+
+    // Orçamento do dia, com reserva antes de cada chamada de modelo --------------
+
+    async reservarOrcamento(tenantId: string, valor: number): Promise<boolean> {
+      const [linha] = await sql<{ ok: boolean }[]>`
+        select atendimento.reservar_orcamento(${tenantId}, ${valor}) as ok`;
+      return linha.ok;
+    },
+
+    async liquidarOrcamento(tenantId: string, reservado: number, gasto: number) {
+      await sql`select atendimento.liquidar_orcamento(${tenantId}, ${reservado}, ${gasto})`;
     },
 
     async config(tenantId: string): Promise<ConfigAtendimento | null> {
       const [linha] = await sql`
-        select modo, modelo_barato, modelo_forte, teto_diario_usd, limite_contato_hora, instrucoes
+        select modo, modelo_barato, modelo_forte, teto_diario_usd, limite_contato_hora,
+               reserva_barato_usd, reserva_forte_usd, instrucoes
         from atendimento.config where tenant_id = ${tenantId}`;
       if (!linha) return null;
       return {
@@ -117,6 +214,8 @@ export function criarRepositorioAtendimento(url: string) {
         modelo_forte: linha.modelo_forte,
         teto_diario_usd: Number(linha.teto_diario_usd),
         limite_contato_hora: linha.limite_contato_hora,
+        reserva_barato_usd: Number(linha.reserva_barato_usd),
+        reserva_forte_usd: Number(linha.reserva_forte_usd),
         instrucoes: linha.instrucoes,
       };
     },

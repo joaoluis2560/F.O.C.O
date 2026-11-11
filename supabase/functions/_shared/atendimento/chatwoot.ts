@@ -1,7 +1,7 @@
 // Chatwoot: leitura do webhook de Agent Bot e envio de respostas pela API.
 //
-// O formato do webhook e os endpoints seguem a documentação pública do
-// Chatwoot e ainda não foram exercitados contra uma instância real.
+// O formato do webhook, a assinatura e os endpoints seguem a documentação e o
+// código-fonte públicos do Chatwoot; ainda não rodaram contra uma instância real.
 
 import { validarDestino } from "../conectores/seguranca.ts";
 
@@ -58,6 +58,65 @@ export function interpretarWebhook(corpo: unknown): EventoCanal {
   };
 }
 
+/** Tolerância entre o horário assinado e o relógio do servidor. */
+export const JANELA_ASSINATURA_SEG = 300;
+
+function hex(bytes: ArrayBuffer): string {
+  return [...new Uint8Array(bytes)].map((b) => b.toString(16).padStart(2, "0")).join("");
+}
+
+/**
+ * Confere a assinatura do webhook do Chatwoot:
+ *   X-Chatwoot-Signature = "sha256=" + HMAC-SHA256(segredo, "{timestamp}.{corpo bruto}")
+ * O horário assinado precisa estar dentro da janela, o que limita reenvio de
+ * uma requisição capturada. Devolve o motivo da recusa, ou null se válida.
+ */
+export async function verificarAssinatura(
+  segredo: string,
+  timestamp: string | null,
+  assinatura: string | null,
+  corpoBruto: string,
+  agoraSeg = Math.floor(Date.now() / 1000),
+): Promise<string | null> {
+  if (!timestamp || !assinatura) return "assinatura ausente";
+  if (!/^[0-9]{9,12}$/.test(timestamp)) return "horário inválido";
+  if (Math.abs(agoraSeg - Number(timestamp)) > JANELA_ASSINATURA_SEG) {
+    return "horário fora da janela";
+  }
+  const recebida = assinatura.startsWith("sha256=") ? assinatura.slice(7) : "";
+  if (!/^[0-9a-f]{64}$/.test(recebida)) return "assinatura malformada";
+
+  const codificador = new TextEncoder();
+  const chave = await crypto.subtle.importKey(
+    "raw",
+    codificador.encode(segredo),
+    { name: "HMAC", hash: "SHA-256" },
+    false,
+    ["sign"],
+  );
+  const esperada = hex(
+    await crypto.subtle.sign("HMAC", chave, codificador.encode(`${timestamp}.${corpoBruto}`)),
+  );
+  // Comparação em tempo constante.
+  let diferenca = 0;
+  for (let i = 0; i < esperada.length; i++) {
+    diferenca |= esperada.charCodeAt(i) ^ recebida.charCodeAt(i);
+  }
+  return diferenca === 0 ? null : "assinatura não confere";
+}
+
+/**
+ * Falha ao falar com o canal. `nao_entregue` é verdadeiro quando o canal
+ * respondeu com erro (a mensagem com certeza não foi aceita) e falso quando a
+ * chamada caiu no meio (tempo esgotado, rede): aí não se sabe se chegou.
+ */
+export class ErroCanal extends Error {
+  constructor(mensagem: string, public nao_entregue: boolean) {
+    super(mensagem);
+    this.name = "ErroCanal";
+  }
+}
+
 /** O que o worker precisa fazer no canal, qualquer que seja ele. */
 export interface ClienteCanal {
   /** Mensagem visível para o cliente. */
@@ -66,6 +125,8 @@ export interface ClienteCanal {
   notaInterna(conversaExterna: string, texto: string): Promise<void>;
   /** Tira a conversa do bot e a coloca na fila da equipe. */
   transferir(conversaExterna: string): Promise<void>;
+  /** Telefone do contato, lido direto do canal. Null se não houver. */
+  telefoneDaConversa(conversaExterna: string): Promise<string | null>;
 }
 
 export interface OpcoesChatwoot {
@@ -77,29 +138,49 @@ export interface OpcoesChatwoot {
 }
 
 export function criarClienteChatwoot(o: OpcoesChatwoot): ClienteCanal {
-  async function chamar(conversa: string, sufixo: string, corpo: unknown): Promise<void> {
-    if (!/^[0-9]+$/.test(conversa)) throw new Error("conversa inválida");
+  async function chamar(
+    conversa: string,
+    sufixo: string,
+    corpo?: unknown,
+  ): Promise<Response> {
+    if (!/^[0-9]+$/.test(conversa)) throw new ErroCanal("conversa inválida", true);
     // A URL base é configurada pelo tenant: mesma proteção dos conectores.
     const url = await validarDestino(
       { base_url: o.base_url, permite_http: o.permite_http, tipo_auth: "nenhuma", auth_config: {} },
-      `/api/v1/accounts/${o.conta_externa}/conversations/${conversa}/${sufixo}`,
+      `/api/v1/accounts/${o.conta_externa}/conversations/${conversa}${sufixo}`,
       new URLSearchParams(),
     );
-    const resposta = await (o.fetch ?? fetch)(url, {
-      method: "POST",
-      headers: { api_access_token: o.token, "content-type": "application/json" },
-      body: JSON.stringify(corpo),
-      redirect: "manual",
-      signal: AbortSignal.timeout(15_000),
-    });
-    await resposta.body?.cancel();
-    if (!resposta.ok) throw new Error(`canal respondeu HTTP ${resposta.status}`);
+    let resposta: Response;
+    try {
+      resposta = await (o.fetch ?? fetch)(url, {
+        method: corpo === undefined ? "GET" : "POST",
+        headers: { api_access_token: o.token, "content-type": "application/json" },
+        body: corpo === undefined ? undefined : JSON.stringify(corpo),
+        redirect: "manual",
+        signal: AbortSignal.timeout(15_000),
+      });
+    } catch {
+      // Caiu no meio: o canal pode ou não ter recebido.
+      throw new ErroCanal("falha de rede ao falar com o canal", false);
+    }
+    if (!resposta.ok) {
+      await resposta.body?.cancel();
+      throw new ErroCanal(`canal respondeu HTTP ${resposta.status}`, true);
+    }
+    return resposta;
   }
+  const enviarCorpo = async (conversa: string, sufixo: string, corpo: unknown) => {
+    await (await chamar(conversa, sufixo, corpo)).body?.cancel();
+  };
   return {
     enviar: (c, texto) =>
-      chamar(c, "messages", { content: texto, message_type: "outgoing", private: false }),
+      enviarCorpo(c, "/messages", { content: texto, message_type: "outgoing", private: false }),
     notaInterna: (c, texto) =>
-      chamar(c, "messages", { content: texto, message_type: "outgoing", private: true }),
-    transferir: (c) => chamar(c, "toggle_status", { status: "open" }),
+      enviarCorpo(c, "/messages", { content: texto, message_type: "outgoing", private: true }),
+    transferir: (c) => enviarCorpo(c, "/toggle_status", { status: "open" }),
+    async telefoneDaConversa(c) {
+      const dados = await (await chamar(c, "")).json();
+      return telefone(dados?.meta?.sender?.phone_number);
+    },
   };
 }

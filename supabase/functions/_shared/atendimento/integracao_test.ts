@@ -9,7 +9,7 @@ import { carregarCatalogo, carregarConector, subirErp } from "../conectores/apoi
 import { hashDefinicao } from "../conectores/executor.ts";
 import type { Catalogo } from "../conectores/tipos.ts";
 import { criarRepositorioPg } from "../mcp/repositorio_pg.ts";
-import type { ClienteCanal } from "./chatwoot.ts";
+import { type ClienteCanal, ErroCanal } from "./chatwoot.ts";
 import { LIMITE_TURNOS, TURNOS_MANTIDOS } from "./contexto.ts";
 import type { ClienteModelo, MensagemModelo, RespostaModelo } from "./modelo.ts";
 import { criarRepositorioAtendimento } from "./repositorio.ts";
@@ -28,7 +28,6 @@ Deno.test({
     const nucleo = criarRepositorioPg(url!);
     const { integracao, segredo, parar } = subirErp();
     const sufixo = crypto.randomUUID().slice(0, 8);
-    const hashCanal = crypto.randomUUID().replaceAll("-", "").repeat(2);
 
     // Canal falso: guarda o que seria enviado.
     const canal: { tipo: string; conversa: string; texto?: string }[] = [];
@@ -38,6 +37,10 @@ Deno.test({
       notaInterna: (conversa, texto) =>
         Promise.resolve(void canal.push({ tipo: "nota", conversa, texto })),
       transferir: (conversa) => Promise.resolve(void canal.push({ tipo: "transferir", conversa })),
+      telefoneDaConversa: (conversa) => {
+        canal.push({ tipo: "telefone", conversa });
+        return Promise.resolve("5511999990001");
+      },
     };
 
     // Modelo roteirizado, com registro das ferramentas oferecidas e dos resultados vistos.
@@ -115,25 +118,17 @@ Deno.test({
       }, 'pacote')`;
       await sql`update cerebro.fatos set status = 'ativo', revisado_em = now()
                 where tenant_id = ${tenant.id}`;
-      await sql`
+      const [cadastro] = await sql`
         insert into atendimento.canais
-          (tenant_id, tipo, nome, hash, conta_externa, base_url, segredo_id)
-        values (${tenant.id}, 'chatwoot', 'whatsapp', ${hashCanal}, '7',
-                'https://chat.example', ${seg_canal})`;
+          (tenant_id, tipo, nome, conta_externa, base_url, segredo_id, assinatura_segredo_id)
+        values (${tenant.id}, 'chatwoot', 'whatsapp', '7', 'https://chat.example',
+                ${seg_canal}, ${seg_canal})
+        returning id`;
       await sql`
         insert into atendimento.config (tenant_id, modo, modelo_barato, modelo_forte)
         values (${tenant.id}, 'producao', 'teste/barato', 'teste/forte')`;
 
-      // Regressão: o histórico já foi ordenado pelo id como texto, o que embaralhava
-      // a conversa quando os ids mudavam de número de dígitos (99 -> 100). O teste
-      // posiciona a sequência logo antes de uma dessas viradas.
-      const [{ atual }] = await sql`
-        select nextval(pg_get_serial_sequence('atendimento.mensagens', 'id'))::int as atual`;
-      const virada = 10 ** String(atual + 2).length;
-      await sql`
-        select setval(pg_get_serial_sequence('atendimento.mensagens', 'id'), ${virada - 2})`;
-
-      const canalId = await repo.identificarCanal(hashCanal);
+      const canalId = await repo.canalDoWebhook(cadastro.id);
       assert(canalId);
       let n = 0;
       const chega = (conversa: string, contato: string | null, texto: string, extra = {}) =>
@@ -201,14 +196,37 @@ Deno.test({
       await t.step("histórico da conversa acompanha o próximo pedido", async () => {
         const { resumo, turnos } = await repo.contexto(tenant.id, await conversaId("100"));
         assertEquals(resumo, null);
-        // Os ids desta conversa cruzam uma virada de dígitos e a ordem se mantém.
-        const ids = turnos.map((h) => Number(h.id));
-        assert(ids[0] < virada && ids.at(-1)! >= virada, `ids ${ids[0]}..${ids.at(-1)}`);
-        assertEquals(ids, [...ids].sort((a, b) => a - b));
+
         assertEquals(turnos.slice(0, 3).map((h) => [h.autor, h.texto]), [
           ["cliente", "Oi"],
           ["cliente", "que horas vocês abrem?"],
           ["agente", "Abrimos às 8h."],
+        ]);
+      });
+
+      await t.step("histórico segue a ordem numérica dos ids, não a alfabética", async () => {
+        // Regressão: o histórico já foi ordenado pelo id como texto, o que
+        // embaralhava a conversa quando os ids mudavam de número de dígitos.
+        // Ids explícitos dos dois lados de uma virada (15 e 16 dígitos).
+        await chega("150", "5511999990001", "primeira");
+        const id = await conversaId("150");
+        await sql`update atendimento.mensagens set estado = 'concluida' where conversa_id = ${id}`;
+        for (
+          const [mid, texto] of [["999999999999999", "antes da virada"], [
+            "1000000000000000",
+            "depois da virada",
+          ]]
+        ) {
+          await sql`
+            insert into atendimento.mensagens (id, tenant_id, conversa_id, direcao, autor, texto)
+            overriding system value
+            values (${mid}, ${tenant.id}, ${id}, 'saida', 'agente', ${texto})`;
+        }
+        const { turnos } = await repo.contexto(tenant.id, id);
+        assertEquals(turnos.map((h) => h.texto), [
+          "primeira",
+          "antes da virada",
+          "depois da virada",
         ]);
       });
 
@@ -284,37 +302,253 @@ Deno.test({
         await sql`update atendimento.config set teto_diario_usd = 2 where tenant_id = ${tenant.id}`;
       });
 
+      const vencerPrazo = () =>
+        sql`update atendimento.mensagens set lease_ate = now() - interval '1 second'
+            where tenant_id = ${tenant.id} and estado = 'processando'`;
+      const entregasDe = async (externa: string) =>
+        await sql`
+          select e.etapa, e.em_andamento, e.incerta, e.concluida_em is not null as concluida
+          from atendimento.entregas e join atendimento.conversas c on c.id = e.conversa_id
+          where c.tenant_id = ${tenant.id} and c.conversa_externa = ${externa} order by e.criado_em`;
+      const tentar = async (d: typeof deps) => {
+        try {
+          await processarProximoLote(d);
+          return false;
+        } catch {
+          return true;
+        }
+      };
+
       await t.step(
-        "falha na entrega: custo fica registrado e o lote volta para a fila",
+        "canal recusa o envio: nova tentativa reenvia a mesma resposta, sem chamar o modelo",
         async () => {
           await chega("600", "5511999990006", "oi");
           fila.push(fala("Olá!"));
-          const quebrado = {
+          const recusando = {
             ...deps,
             canal: () => ({
               ...clienteCanal,
-              enviar: () => Promise.reject(new Error("canal respondeu HTTP 500")),
+              enviar: () => Promise.reject(new ErroCanal("canal respondeu HTTP 500", true)),
             }),
           };
-          let lancou = false;
-          try {
-            await processarProximoLote(quebrado);
-          } catch {
-            lancou = true;
-          }
-          assert(lancou);
+          assert(await tentar(recusando));
           const ultimas = (await execucoes()).slice(-2).map((e) => [e.nivel, e.resultado]);
           assertEquals(ultimas, [[1, "respondeu"], [0, "falhou"]]);
-          // Prazo vence e a mensagem é entregue de novo.
-          await sql`update atendimento.mensagens set lease_ate = now() - interval '1 second'
-                  where tenant_id = ${tenant.id} and estado = 'processando'`;
+          assertEquals(
+            (await entregasDe("600")).map((e) => [e.etapa, e.em_andamento, e.concluida]),
+            [[0, false, false]],
+          );
+
+          await vencerPrazo();
           canal.length = 0;
-          fila.push(fala("Olá de novo!"));
+          const chamadasAntes = visto.length;
           const r = await processarProximoLote(deps);
           assertEquals(r?.acao, "responder");
-          assertEquals(canal[0].texto, "Olá de novo!");
+          // Mesma resposta decidida antes; o modelo não foi chamado de novo.
+          assertEquals(canal, [{ tipo: "enviar", conversa: "600", texto: "Olá!" }]);
+          assertEquals(visto.length, chamadasAntes);
+          assertEquals((await entregasDe("600")).map((e) => [e.etapa, e.concluida]), [[1, true]]);
         },
       );
+
+      await t.step(
+        "banco falha depois do envio aceito: o cliente não recebe a mensagem duas vezes",
+        async () => {
+          await chega("610", "5511999990006", "oi");
+          fila.push(fala("Resposta única."));
+          canal.length = 0;
+          // O canal aceita o envio; a gravação seguinte no banco falha.
+          const falhandoDepois = {
+            ...deps,
+            repo: {
+              ...repo,
+              registrarSaida: () => Promise.reject(new Error("banco indisponível")),
+            },
+          };
+          assert(await tentar(falhandoDepois));
+          assertEquals(canal.filter((c) => c.tipo === "enviar").length, 1);
+
+          await vencerPrazo();
+          const chamadasAntes = visto.length;
+          const r = await processarProximoLote(deps);
+          assertEquals(r?.acao, "responder");
+          // Etapa de envio já estava confirmada: nada é reenviado nem recalculado.
+          assertEquals(canal.filter((c) => c.tipo === "enviar").length, 1);
+          assertEquals(visto.length, chamadasAntes);
+          assertEquals((await entregasDe("610")).map((e) => [e.etapa, e.concluida]), [[1, true]]);
+        },
+      );
+
+      await t.step(
+        "envio caiu no meio (não se sabe se chegou): não reenvia e avisa a equipe",
+        async () => {
+          await chega("620", "5511999990006", "oi");
+          fila.push(fala("Talvez entregue."));
+          canal.length = 0;
+          const caindo = {
+            ...deps,
+            canal: () => ({
+              ...clienteCanal,
+              enviar: () => Promise.reject(new ErroCanal("falha de rede", false)),
+            }),
+          };
+          assert(await tentar(caindo));
+          assertEquals(
+            (await entregasDe("620")).map((e) => [e.etapa, e.em_andamento]),
+            [[0, true]],
+          );
+
+          await vencerPrazo();
+          const r = await processarProximoLote(deps);
+          assertEquals(r?.acao, "responder");
+          assertEquals(canal.filter((c) => c.tipo === "enviar").length, 0);
+          assertEquals(canal.filter((c) => c.tipo === "nota").length, 1);
+          assert(canal[0].texto?.includes("pode não ter chegado"));
+          assertEquals(
+            (await entregasDe("620")).map((e) => [e.incerta, e.concluida]),
+            [[true, true]],
+          );
+          assertEquals((await execucoes()).at(-1)?.motivo, "entrega_incerta");
+        },
+      );
+
+      await t.step(
+        "muitos workers reivindicando juntos: cada conversa sai uma vez, nunca vazia",
+        async () => {
+          // Conexões próprias para haver concorrência de verdade no banco.
+          const paralelo = postgres(url!, { prepare: false, max: 12, onnotice: () => {} });
+          try {
+            for (let rodada = 0; rodada < 25; rodada++) {
+              const conversas = [0, 1, 2, 3].map((i) => `9${rodada}${i}`);
+              for (const c of conversas) await chega(c, "5511999990006", "oi");
+              const lotes = (await Promise.all(
+                Array.from(
+                  { length: 12 },
+                  () =>
+                    paralelo`select conversa_externa, mensagem_ids, texto, reivindicacao
+                           from atendimento.reivindicar_lote(0, 180)`,
+                ),
+              )).flat();
+              // Nenhum lote vazio e nenhuma conversa entregue a dois workers.
+              assert(lotes.every((l) => l.mensagem_ids?.length === 1 && l.texto === "oi"));
+              assertEquals(lotes.map((l) => l.conversa_externa).sort(), conversas);
+              for (const l of lotes) {
+                await repo.concluirLote(l.mensagem_ids, l.reivindicacao, "ignorada");
+              }
+            }
+          } finally {
+            await paralelo.end({ timeout: 2 });
+          }
+        },
+      );
+
+      await t.step("dois workers ao mesmo tempo: só um pega a conversa", async () => {
+        await chega("630", "5511999990006", "oi");
+        fila.push(fala("Só uma vez."));
+        canal.length = 0;
+        const [a, b] = await Promise.all([processarProximoLote(deps), processarProximoLote(deps)]);
+        assertEquals([a, b].filter((r) => r !== null).length, 1);
+        assertEquals(canal.filter((c) => c.tipo === "enviar").length, 1);
+      });
+
+      await t.step(
+        "prazo vence durante a execução: o primeiro worker para e só o segundo responde",
+        async () => {
+          await chega("640", "5511999990006", "pergunta demorada");
+          canal.length = 0;
+          let segundo: Awaited<ReturnType<typeof processarProximoLote>> = null;
+          let etapa = 0;
+          // Modelo do primeiro worker: na primeira chamada o prazo vence e um
+          // segundo worker assume o lote e conclui. Depois ele pede uma ferramenta,
+          // o que obrigaria uma segunda chamada de modelo.
+          const lento: ClienteModelo = async (pedido) => {
+            if (etapa++ === 0) {
+              await vencerPrazo();
+              segundo = await processarProximoLote({
+                ...deps,
+                modelo: () => Promise.resolve(fala("Do segundo.")),
+              });
+              return chama("cerebro_buscar", { pergunta: "qualquer coisa" });
+            }
+            return modelo(pedido);
+          };
+          const primeiro = await processarProximoLote({ ...deps, modelo: lento });
+
+          assertEquals(segundo!.acao, "responder");
+          assertEquals([primeiro?.acao, primeiro?.motivo], ["ignorar", "reivindicacao_perdida"]);
+          // O primeiro worker parou antes da segunda chamada e não enviou nada.
+          assertEquals(etapa, 1);
+          assertEquals(canal.filter((c) => c.tipo === "enviar").map((c) => c.texto), [
+            "Do segundo.",
+          ]);
+          const [{ estados }] = await sql`
+            select array_agg(distinct m.estado::text) as estados from atendimento.mensagens m
+            join atendimento.conversas c on c.id = m.conversa_id
+            where c.tenant_id = ${tenant.id} and c.conversa_externa = '640' and m.direcao = 'entrada'`;
+          assertEquals(estados, ["concluida"]);
+        },
+      );
+
+      await t.step("orçamento: reserva negada transfere sem chamar o modelo", async () => {
+        // Sobra menos que uma reserva: a regra de teto ainda não dispara, a reserva sim.
+        const [{ gasto }] = await sql`
+          select gasto_usd::float8 as gasto from atendimento.orcamento_dia
+          where tenant_id = ${tenant.id} and dia = current_date`;
+        await sql`update atendimento.config set teto_diario_usd = ${gasto + 0.004}
+                  where tenant_id = ${tenant.id}`;
+        await chega("650", "5511999990006", "oi");
+        canal.length = 0;
+        const chamadasAntes = visto.length;
+        const r = await processarProximoLote(deps);
+        assertEquals([r?.acao, r?.motivo], ["transferir", "teto_diario"]);
+        assertEquals(visto.length, chamadasAntes);
+        assertEquals(canal.map((c) => c.tipo), ["enviar", "nota", "transferir"]);
+      });
+
+      await t.step("orçamento: duas conversas em paralelo não furam o teto", async () => {
+        const [{ gasto }] = await sql`
+          select gasto_usd::float8 as gasto from atendimento.orcamento_dia
+          where tenant_id = ${tenant.id} and dia = current_date`;
+        // Cabe uma reserva (0,005), não duas.
+        await sql`update atendimento.config set teto_diario_usd = ${gasto + 0.008}
+                  where tenant_id = ${tenant.id}`;
+        await chega("660", "5511999990006", "oi");
+        await chega("661", "5511999990007", "oi");
+        canal.length = 0;
+        let simultaneas = 0;
+        let pico = 0;
+        const demorado: ClienteModelo = async () => {
+          pico = Math.max(pico, ++simultaneas);
+          await new Promise((ok) => setTimeout(ok, 150));
+          simultaneas--;
+          return fala("Dentro do teto.");
+        };
+        const d = { ...deps, modelo: demorado };
+        const resultados = await Promise.all([processarProximoLote(d), processarProximoLote(d)]);
+        assertEquals(resultados.map((r) => r?.acao).sort(), ["responder", "transferir"]);
+        assertEquals(resultados.find((r) => r?.acao === "transferir")?.motivo, "teto_diario");
+        assertEquals(pico, 1);
+        const [{ reservado }] = await sql`
+          select reservado_usd::float8 as reservado from atendimento.orcamento_dia
+          where tenant_id = ${tenant.id} and dia = current_date`;
+        assertEquals(reservado, 0);
+        await sql`update atendimento.config set teto_diario_usd = 2 where tenant_id = ${tenant.id}`;
+      });
+
+      await t.step("telefone ausente no webhook é lido do canal, não do modelo", async () => {
+        await chega("670", null, "tenho boleto em aberto?");
+        canal.length = 0;
+        visto.length = 0;
+        fila.push(chama("financeiro_titulos_em_aberto", {}), fala("Você tem um boleto."));
+        const r = await processarProximoLote(deps);
+        assertEquals(r?.acao, "responder");
+        assertEquals(canal[0], { tipo: "telefone", conversa: "670" });
+        assert(visto[1].ultima.includes('"titulo_id":"T-1"'));
+        const [{ contato }] = await sql`
+          select contato from atendimento.conversas
+          where tenant_id = ${tenant.id} and conversa_externa = '670'`;
+        assertEquals(contato, "5511999990001");
+      });
 
       await t.step("conversa longa: turnos antigos viram resumo antes de atender", async () => {
         await chega("700", "5511999990007", "primeira mensagem");
@@ -349,7 +583,8 @@ Deno.test({
 
         // Segunda chamada: o agente recebe o resumo e só os turnos recentes.
         const pedidoAgente = visto[1].mensagens;
-        assertEquals(pedidoAgente[1].role, "system");
+        assertEquals(pedidoAgente[1].role, "user");
+        assertEquals(pedidoAgente.filter((m) => m.role === "system").length, 1);
         assert(pedidoAgente[1].content.includes("Cliente pediu tinta branca"));
         assertEquals(pedidoAgente.length, 2 + TURNOS_MANTIDOS + 1);
         assertEquals(pedidoAgente.at(-1)?.content, "e o prazo de entrega?");
@@ -399,6 +634,8 @@ Deno.test({
         assertEquals(visto[1].mensagens.length, 1 + TURNOS_MANTIDOS + 1);
         const ultimas = (await execucoes()).slice(-2).map((e) => [e.resultado, e.motivo]);
         assertEquals(ultimas[0], ["falhou", "resumo_de_contexto: resumo vazio"]);
+        // A chamada do resumo custou, mesmo sem resultado aproveitável.
+        assertEquals((await execucoes()).slice(-2)[0].custo, 0.0004);
       });
 
       await t.step("nada ficou preso na fila", async () => {

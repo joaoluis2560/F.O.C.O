@@ -37,6 +37,8 @@ export type ClienteModelo = (pedido: {
   modelo: string;
   mensagens: MensagemModelo[];
   ferramentas: FerramentaModelo[];
+  /** Limite de tokens de saída desta chamada (inclui o raciocínio do modelo). */
+  max_tokens?: number;
 }) => Promise<RespostaModelo>;
 
 export const USO_ZERO: Uso = { tokens_entrada: 0, tokens_cache: 0, tokens_saida: 0, custo_usd: 0 };
@@ -58,11 +60,11 @@ export interface OpcoesOpenRouter {
 }
 
 export function criarClienteOpenRouter(o: OpcoesOpenRouter): ClienteModelo {
-  return async ({ modelo, mensagens, ferramentas }) => {
+  return async ({ modelo, mensagens, ferramentas, max_tokens }) => {
     const anthropic = modelo.startsWith("anthropic/");
     const corpo = {
       model: modelo,
-      max_tokens: o.max_tokens ?? 1200,
+      max_tokens: max_tokens ?? o.max_tokens ?? 1200,
       // Pede o custo real da chamada na resposta.
       usage: { include: true },
       messages: mensagens.map((m) => {

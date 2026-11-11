@@ -1,14 +1,20 @@
 // Edge Function: entrada do Chatwoot (webhook de Agent Bot).
 // Só grava a mensagem na fila e responde rápido; quem pensa é o worker.
-// URL: /functions/v1/chatwoot?t=<token do canal>
+//
+// URL: /functions/v1/chatwoot?c=<id do canal>
+// O id do canal não é segredo. A origem é provada pela assinatura que o
+// Chatwoot envia em X-Chatwoot-Signature, calculada sobre o horário e o corpo
+// bruto com o segredo do webhook (guardado no Vault).
 
+import { interpretarWebhook, verificarAssinatura } from "../_shared/atendimento/chatwoot.ts";
 import { criarRepositorioAtendimento } from "../_shared/atendimento/repositorio.ts";
-import { interpretarWebhook } from "../_shared/atendimento/chatwoot.ts";
-import { lerCorpoLimitado, sha256Hex } from "../_shared/mcp/servidor.ts";
+import { lerCorpoLimitado } from "../_shared/mcp/servidor.ts";
 
 const url = Deno.env.get("SUPABASE_DB_URL");
 if (!url) throw new Error("SUPABASE_DB_URL não definida");
 const repo = criarRepositorioAtendimento(url);
+
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 
 const json = (corpo: unknown, status = 200) =>
   new Response(JSON.stringify(corpo), {
@@ -20,15 +26,27 @@ Deno.serve(async (req) => {
   try {
     if (req.method !== "POST") return json({ error: "use POST" }, 405);
 
-    // 1. O token na URL identifica canal e tenant. Nada no corpo é confiável para isso.
-    const token = new URL(req.url).searchParams.get("t") ?? "";
-    const canal = /^[A-Za-z0-9_-]{20,}$/.test(token)
-      ? await repo.identificarCanal(await sha256Hex(token))
-      : null;
-    if (!canal) return json({ error: "não autorizado" }, 401);
+    const canalId = new URL(req.url).searchParams.get("c") ?? "";
+    const canal = UUID.test(canalId) ? await repo.canalDoWebhook(canalId) : null;
+    // Mesma resposta para canal inexistente e assinatura errada.
+    const negado = () => json({ error: "não autorizado" }, 401);
+    if (!canal) {
+      await req.body?.cancel();
+      return negado();
+    }
 
     const bruto = await lerCorpoLimitado(req, 200_000);
     if (bruto === null) return json({ error: "requisição grande demais" }, 413);
+
+    // 1. Prova de origem: assinatura sobre o corpo bruto, antes de interpretá-lo.
+    const recusa = await verificarAssinatura(
+      canal.segredo_assinatura,
+      req.headers.get("x-chatwoot-timestamp"),
+      req.headers.get("x-chatwoot-signature"),
+      bruto,
+    );
+    if (recusa) return negado();
+
     let corpo: unknown;
     try {
       corpo = JSON.parse(bruto);
@@ -42,6 +60,7 @@ Deno.serve(async (req) => {
     if (evento.conta_externa !== canal.conta_externa) {
       return json({ error: "conta não corresponde ao canal" }, 403);
     }
+    // 3. Reenvio da mesma mensagem não entra duas vezes (id externo único).
     const nova = await repo.receberMensagem(canal, evento);
     return json({ ok: true, nova });
   } catch (erro) {

@@ -6,6 +6,9 @@ export interface ConfigAtendimento {
   modelo_forte: string;
   teto_diario_usd: number;
   limite_contato_hora: number;
+  /** Valor reservado do teto antes de cada chamada ao modelo barato / forte. */
+  reserva_barato_usd: number;
+  reserva_forte_usd: number;
   instrucoes: string | null;
 }
 

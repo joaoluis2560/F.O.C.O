@@ -4,19 +4,24 @@ begin;
 
 create extension if not exists pgtap with schema extensions;
 
-select plan(36);
+select plan(50);
 
 select testes.fixtures();
 
 select vault.create_secret('token-chatwoot-a', 'teste-chatwoot-a') as seg_a \gset
 select vault.create_secret('token-chatwoot-b', 'teste-chatwoot-b') as seg_b \gset
+select vault.create_secret('assinatura-a', 'teste-assinatura-a') as ass_a \gset
+select vault.create_secret('assinatura-b', 'teste-assinatura-b') as ass_b \gset
 
-insert into atendimento.canais (id, tenant_id, tipo, nome, hash, conta_externa, base_url, segredo_id)
+insert into atendimento.canais
+  (id, tenant_id, tipo, nome, conta_externa, base_url, segredo_id, assinatura_segredo_id)
 values
   ('a3000000-0000-0000-0000-000000000000', testes.id('a'), 'chatwoot', 'whatsapp',
-   repeat('a', 64), '1', 'https://chat-a.example', :'seg_a'),
+   '1', 'https://chat-a.example', :'seg_a', :'ass_a'),
   ('b3000000-0000-0000-0000-000000000000', testes.id('b'), 'chatwoot', 'whatsapp',
-   repeat('b', 64), '2', 'https://chat-b.example', :'seg_b');
+   '2', 'https://chat-b.example', :'seg_b', :'ass_b'),
+  ('a4000000-0000-0000-0000-000000000000', testes.id('a'), 'chatwoot', 'sem-assinatura',
+   '3', 'https://chat-a.example', :'seg_a', null);
 
 insert into atendimento.config (tenant_id, modelo_barato, modelo_forte)
 values (testes.id('a'), 'fornecedor/barato', 'fornecedor/forte'),
@@ -46,13 +51,22 @@ select ok(
 -- Canal -----------------------------------------------------------------------
 
 select results_eq(
-  format($$select tenant_id from atendimento.identificar_canal(%L)$$, repeat('a', 64)),
-  array[testes.id('a')],
-  'token do webhook resolve o tenant'
+  $$select tenant_id, segredo_assinatura
+    from atendimento.canal_do_webhook('a3000000-0000-0000-0000-000000000000')$$,
+  format($$values (%L::uuid, 'assinatura-a')$$, testes.id('a')),
+  'id do canal resolve o tenant e o segredo da assinatura'
 );
 select is_empty(
-  format($$select 1 from atendimento.identificar_canal(%L)$$, repeat('c', 64)),
-  'token desconhecido não resolve canal'
+  $$select 1 from atendimento.canal_do_webhook('c3000000-0000-0000-0000-000000000000')$$,
+  'canal desconhecido não resolve'
+);
+select is_empty(
+  $$select 1 from atendimento.canal_do_webhook('a4000000-0000-0000-0000-000000000000')$$,
+  'canal sem segredo de assinatura não aceita webhook'
+);
+select ok(
+  not has_function_privilege('authenticated', 'atendimento.canal_do_webhook(uuid)', 'execute'),
+  'authenticated não lê o segredo da assinatura'
 );
 select is(
   atendimento.ler_segredo_canal(testes.id('a'), 'b3000000-0000-0000-0000-000000000000'),
@@ -102,9 +116,39 @@ select isnt_empty(
   'lote com prazo vencido volta para a fila'
 );
 
-select atendimento.concluir_lote(
-  (select array_agg(id) from atendimento.mensagens where tenant_id = testes.id('a')),
-  'concluida'
+-- O lote foi reivindicado duas vezes: a primeira reivindicação perdeu a vez.
+select reivindicacao as atual from atendimento.mensagens
+where tenant_id = testes.id('a') and estado = 'processando' limit 1 \gset
+
+select ok(
+  not atendimento.concluir_lote(
+    (select array_agg(id) from atendimento.mensagens where tenant_id = testes.id('a')),
+    gen_random_uuid(), 'concluida'),
+  'quem não tem a reivindicação atual não conclui o lote'
+);
+select ok(
+  not atendimento.renovar_lote(
+    (select array_agg(id) from atendimento.mensagens where tenant_id = testes.id('a')),
+    gen_random_uuid()),
+  'quem não tem a reivindicação atual não renova o prazo'
+);
+select is(
+  (select count(*) from atendimento.mensagens
+   where tenant_id = testes.id('a') and estado = 'processando'),
+  2::bigint,
+  'tentativa com reivindicação errada não altera o lote'
+);
+select ok(
+  atendimento.renovar_lote(
+    (select array_agg(id) from atendimento.mensagens where tenant_id = testes.id('a')),
+    :'atual'),
+  'dono da reivindicação renova o prazo'
+);
+select ok(
+  atendimento.concluir_lote(
+    (select array_agg(id) from atendimento.mensagens where tenant_id = testes.id('a')),
+    :'atual', 'concluida'),
+  'dono da reivindicação conclui o lote'
 );
 select is(
   (select count(*) from atendimento.mensagens
@@ -177,9 +221,44 @@ select ok(
 update atendimento.mensagens set lease_ate = now() - interval '1 second'
 where externa_id = 'd1';
 select ok(atendimento.ha_trabalho(), 'lote preso com prazo vencido volta a ser trabalho');
+select reivindicacao as d1 from atendimento.reivindicar_lote(8, 120) \gset
 select atendimento.concluir_lote(
-  (select array_agg(id) from atendimento.mensagens where externa_id = 'd1'), 'concluida'
+  (select array_agg(id) from atendimento.mensagens where externa_id = 'd1'), :'d1', 'concluida'
 );
+
+-- Orçamento com reserva -------------------------------------------------------
+
+update atendimento.config set teto_diario_usd = 0.012 where tenant_id = testes.id('a');
+select ok(atendimento.reservar_orcamento(testes.id('a'), 0.005), 'primeira reserva cabe no teto');
+select ok(atendimento.reservar_orcamento(testes.id('a'), 0.005), 'segunda reserva cabe no teto');
+select ok(
+  not atendimento.reservar_orcamento(testes.id('a'), 0.005),
+  'terceira reserva estouraria o teto e é negada'
+);
+select is(
+  (select gasto_dia_usd from atendimento.uso_atual(testes.id('a'), gen_random_uuid())),
+  0.010::numeric,
+  'o que está reservado já conta como gasto do dia'
+);
+select atendimento.liquidar_orcamento(testes.id('a'), 0.005, 0.0004);
+select atendimento.liquidar_orcamento(testes.id('a'), 0.005, 0.0004);
+select results_eq(
+  format(
+    $$select gasto_usd, reservado_usd from atendimento.orcamento_dia where tenant_id = %L$$,
+    testes.id('a')
+  ),
+  $$values (0.0008::numeric, 0::numeric)$$,
+  'liquidar troca a reserva pelo custo real'
+);
+select ok(
+  atendimento.reservar_orcamento(testes.id('a'), 0.005),
+  'depois de liquidar, volta a haver espaço no teto'
+);
+select ok(
+  atendimento.reservar_orcamento(testes.id('b'), 0.005),
+  'reserva de um tenant não consome o teto de outro'
+);
+update atendimento.config set teto_diario_usd = 2 where tenant_id = testes.id('a');
 
 select throws_ok(
   $$update atendimento.conversas set resumo = 'x' where conversa_externa = '20'$$,
@@ -225,8 +304,8 @@ select results_eq(
   'owner A só enxerga conversas (e resumos) do Tenant A'
 );
 select throws_ok(
-  'select hash from atendimento.canais', '42501', null,
-  'owner A não lê o hash do token do canal'
+  'select assinatura_segredo_id from atendimento.canais', '42501', null,
+  'owner A não lê as referências de segredo do canal'
 );
 select is_empty(
   format($$select 1 from atendimento.config where tenant_id = %L$$, testes.id('b')),
