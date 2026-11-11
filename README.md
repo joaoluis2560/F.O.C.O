@@ -13,6 +13,10 @@ Arquitetura, decisões e fases: [docs/plano.md](docs/plano.md).
 - **Fase 1 (integração):** catálogo de capacidades canônicas, tabelas
   `integracao.*`, executor determinístico de conectores, ERP simulado e construtor
   de conectores com Claude.
+- **Fase 2 (segundo cérebro):** schema `cerebro` (fatos, chaves, materiais,
+  revisões), busca em português com filtro de visibilidade, revisão humana
+  obrigatória antes de um fato chegar ao cliente, pacote de domínio inicial
+  (`catalogo/pacotes/base.json`) e ingestão de material com Claude.
 
 ## Requisitos
 

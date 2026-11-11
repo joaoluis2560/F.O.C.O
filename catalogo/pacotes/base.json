@@ -1,0 +1,142 @@
+{
+  "versao": 1,
+  "nome": "base",
+  "descricao": "Perguntas que toda pequena ou média empresa precisa responder antes de colocar o atendimento no ar. Cada resposta vira um fato proposto no cérebro.",
+  "perguntas": [
+    {
+      "id": "operacao.horario",
+      "dominio": "operacao",
+      "tipo": "informacao",
+      "visibilidade": "publico",
+      "titulo": "Horário de atendimento",
+      "pergunta": "Em quais dias e horários a empresa atende? Há diferença em feriados?",
+      "chaves": ["horario", "funcionamento", "aberto", "feriado"]
+    },
+    {
+      "id": "operacao.endereco",
+      "dominio": "operacao",
+      "tipo": "informacao",
+      "visibilidade": "publico",
+      "titulo": "Endereço e como chegar",
+      "pergunta": "Qual o endereço? Há estacionamento ou ponto de referência? Atende só online?",
+      "chaves": ["endereco", "localizacao", "onde fica"]
+    },
+    {
+      "id": "operacao.entrega",
+      "dominio": "operacao",
+      "tipo": "informacao",
+      "visibilidade": "publico",
+      "titulo": "Entrega e prazos",
+      "pergunta": "A empresa entrega? Em quais regiões, com que prazo e a que custo? Há retirada no local?",
+      "chaves": ["entrega", "frete", "prazo", "retirada"]
+    },
+    {
+      "id": "vendas.oferta",
+      "dominio": "vendas",
+      "tipo": "informacao",
+      "visibilidade": "publico",
+      "titulo": "O que a empresa vende",
+      "pergunta": "Quais são os principais produtos ou serviços, em uma descrição que um cliente novo entenda?",
+      "chaves": ["produtos", "servicos", "catalogo"]
+    },
+    {
+      "id": "vendas.pagamento",
+      "dominio": "vendas",
+      "tipo": "informacao",
+      "visibilidade": "publico",
+      "titulo": "Formas de pagamento",
+      "pergunta": "Quais formas de pagamento são aceitas? Parcela em quantas vezes? Há desconto à vista?",
+      "chaves": ["pagamento", "pix", "cartao", "boleto", "parcelamento"]
+    },
+    {
+      "id": "vendas.troca",
+      "dominio": "vendas",
+      "tipo": "regra",
+      "visibilidade": "publico",
+      "titulo": "Troca, devolução e garantia",
+      "pergunta": "Qual a política de troca, devolução e garantia? Quais prazos e condições?",
+      "chaves": ["troca", "devolucao", "garantia"]
+    },
+    {
+      "id": "vendas.orcamento",
+      "dominio": "vendas",
+      "tipo": "procedimento",
+      "visibilidade": "publico",
+      "titulo": "Como pedir orçamento ou fazer um pedido",
+      "pergunta": "O que o cliente precisa informar para receber um orçamento ou fechar um pedido?",
+      "chaves": ["orcamento", "pedido", "comprar"]
+    },
+    {
+      "id": "vendas.desconto",
+      "dominio": "vendas",
+      "tipo": "regra",
+      "visibilidade": "interno",
+      "titulo": "Limites de desconto e negociação",
+      "pergunta": "Até quanto de desconto pode ser oferecido sem consultar a gerência? Em que casos?",
+      "chaves": ["desconto", "negociacao"]
+    },
+    {
+      "id": "financeiro.cobranca",
+      "dominio": "financeiro",
+      "tipo": "procedimento",
+      "visibilidade": "publico",
+      "titulo": "Segunda via e atraso de pagamento",
+      "pergunta": "Como o cliente obtém segunda via de boleto ou nota? O que acontece em caso de atraso?",
+      "chaves": ["segunda via", "boleto", "nota fiscal", "atraso"]
+    },
+    {
+      "id": "estoque.falta",
+      "dominio": "estoque",
+      "tipo": "procedimento",
+      "visibilidade": "publico",
+      "titulo": "Produto em falta",
+      "pergunta": "Quando um item está em falta, o que dizer ao cliente? Há encomenda, prazo de reposição ou lista de espera?",
+      "chaves": ["falta", "sem estoque", "encomenda", "reposicao"]
+    },
+    {
+      "id": "clientes.cadastro",
+      "dominio": "clientes",
+      "tipo": "procedimento",
+      "visibilidade": "publico",
+      "titulo": "Cadastro e atualização de dados",
+      "pergunta": "Quais dados são pedidos no cadastro e como o cliente atualiza os dele?",
+      "chaves": ["cadastro", "atualizar dados"]
+    },
+    {
+      "id": "clientes.reclamacao",
+      "dominio": "clientes",
+      "tipo": "procedimento",
+      "visibilidade": "interno",
+      "titulo": "Reclamações e casos sensíveis",
+      "pergunta": "Quais assuntos devem ir direto para uma pessoa (reclamação, cancelamento, problema grave)? Quem assume?",
+      "chaves": ["reclamacao", "cancelamento", "transferir"]
+    },
+    {
+      "id": "marketing.promocoes",
+      "dominio": "marketing",
+      "tipo": "informacao",
+      "visibilidade": "publico",
+      "titulo": "Promoções e condições vigentes",
+      "pergunta": "Há promoção, cupom ou programa de fidelidade em vigor? Com que validade e regras?",
+      "chaves": ["promocao", "cupom", "fidelidade"]
+    },
+    {
+      "id": "marketing.tom",
+      "dominio": "marketing",
+      "tipo": "regra",
+      "visibilidade": "interno",
+      "titulo": "Tom de voz do atendimento",
+      "pergunta": "Como a empresa fala com o cliente? Formal ou informal, usa emoji, como se apresenta?",
+      "chaves": ["tom de voz", "apresentacao"]
+    },
+    {
+      "id": "geral.limites",
+      "dominio": "geral",
+      "tipo": "regra",
+      "visibilidade": "interno",
+      "titulo": "O que o atendimento automático não deve fazer",
+      "pergunta": "Há assuntos que o atendimento automático não pode tratar ou promessas que não pode fazer?",
+      "chaves": ["limites", "proibido"]
+    }
+  ]
+}
