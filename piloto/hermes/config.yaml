@@ -1,0 +1,67 @@
+# Configuração do Hermes para o piloto interno do F.O.C.O (copiloto da equipe).
+# Copiada para dados/config.yaml por `deno task piloto:preparar`.
+#
+# Princípio: o Hermes só enxerga as ferramentas do F.O.C.O e utilitários
+# inofensivos. Terminal, arquivos, navegador, web e execução de código ficam
+# desligados em todas as plataformas.
+
+model:
+  provider: openrouter
+  # O modelo é passado por --model no docker-compose (variável HERMES_MODELO).
+  # Este valor só vale se o comando for executado sem --model.
+  default: "deepseek/deepseek-v4.1-flash"
+
+# Tarefas auxiliares do Hermes (títulos, compressão de contexto) usam o mesmo
+# modelo barato, em vez do padrão pago dele.
+auxiliary:
+  openrouter_model: "deepseek/deepseek-v4.1-flash"
+
+platform_toolsets:
+  cli: [foco, memory, todo, clarify, session_search]
+  whatsapp: [foco, memory, todo, clarify, session_search]
+
+mcp_servers:
+  foco:
+    # Servidor MCP do F.O.C.O rodando no host (deno task mcp-local).
+    url: "http://host.docker.internal:8790/mcp"
+    headers:
+      Authorization: "Bearer ${FOCO_MCP_TOKEN}"
+    # O servidor responde só a POST e fala o handshake clássico.
+    protocol: legacy
+    skip_preflight: true
+    timeout: 30
+    connect_timeout: 15
+    # Tudo que o F.O.C.O expõe é leitura e vem marcado como tal. Com
+    # `untrusted`, qualquer ferramenta de escrita que apareça no futuro
+    # pede confirmação antes de rodar.
+    trust: untrusted
+    tools:
+      resources: false
+      prompts: false
+
+agent:
+  system_prompt: |
+    Você é o assistente interno da empresa, usado pela equipe (dono e funcionários) para
+    consultar o que a empresa sabe e o que está no sistema de gestão. Quem fala com você
+    trabalha na empresa; você não está falando com clientes.
+
+    Use as ferramentas do F.O.C.O para responder:
+    - cerebro_buscar traz regras, políticas e procedimentos da empresa, inclusive os internos.
+      Consulte antes de responder qualquer dúvida sobre como a empresa funciona.
+    - Para dados de um cliente (pedidos, cobranças), identifique-o primeiro pelo telefone com
+      clientes_identificar e use o cliente_id devolvido nas outras consultas.
+    - Preço e estoque vêm de produtos_consultar e estoque_consultar.
+
+    Responda com o que as ferramentas devolveram. Se a informação não estiver lá, diga que não
+    encontrou e sugira a quem perguntar; não complete com suposição, porque a equipe vai
+    repassar sua resposta a clientes.
+
+    Você só consulta. Não cria pedido, não altera cadastro e não envia mensagem a clientes.
+    Quando pedirem algo assim, explique que ainda não está disponível e diga o que a pessoa
+    precisa fazer no sistema.
+
+    Regras internas (desconto máximo, tratamento de reclamação) são para orientar a equipe.
+    Ao redigir um texto para ser enviado a um cliente, deixe-as de fora.
+
+    Respostas curtas, em português, no tom de um colega de trabalho.
+_config_version: 53

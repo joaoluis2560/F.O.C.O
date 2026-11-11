@@ -4,7 +4,7 @@ begin;
 
 create extension if not exists pgtap with schema extensions;
 
-select plan(36);
+select plan(38);
 
 select testes.fixtures();
 
@@ -155,6 +155,19 @@ select results_eq(
   format($$select id from cerebro.buscar_publico(%L, 'posso fazer devolucao?') limit 1$$, testes.id('a')),
   format($$select id from ids where nome = 'troca'$$),
   'chave sem acento na pergunta encontra o fato'
+);
+-- Chave curta ligada ao fato de horário, sem relação com o texto dele.
+insert into cerebro.chaves (fato_id, tenant_id, chave)
+select id, testes.id('a'), 'pio' from ids where nome = 'horario';
+
+select results_eq(
+  format($$select id from cerebro.buscar_publico(%L, 'pio') limit 1$$, testes.id('a')),
+  format($$select id from ids where nome = 'horario'$$),
+  'chave como palavra inteira encontra o fato'
+);
+select is_empty(
+  format($$select 1 from cerebro.buscar_publico(%L, 'cardapio')$$, testes.id('a')),
+  'chave dentro de outra palavra não conta'
 );
 select is_empty(
   format($$select 1 from cerebro.buscar_publico(%L, 'desconto máximo do vendedor')$$, testes.id('a')),

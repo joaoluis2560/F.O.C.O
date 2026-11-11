@@ -1,5 +1,5 @@
 {
-  "versao": 1,
+  "versao": 2,
   "nome": "base",
   "descricao": "Perguntas que toda pequena ou média empresa precisa responder antes de colocar o atendimento no ar. Cada resposta vira um fato proposto no cérebro.",
   "perguntas": [
@@ -10,7 +10,7 @@
       "visibilidade": "publico",
       "titulo": "Horário de atendimento",
       "pergunta": "Em quais dias e horários a empresa atende? Há diferença em feriados?",
-      "chaves": ["horario", "funcionamento", "aberto", "feriado"]
+      "chaves": ["horario", "funcionamento", "aberto", "feriado", "horas", "abre", "abrem", "fecha", "fecham", "sabado", "domingo"]
     },
     {
       "id": "operacao.endereco",
@@ -19,7 +19,7 @@
       "visibilidade": "publico",
       "titulo": "Endereço e como chegar",
       "pergunta": "Qual o endereço? Há estacionamento ou ponto de referência? Atende só online?",
-      "chaves": ["endereco", "localizacao", "onde fica"]
+      "chaves": ["endereco", "localizacao", "onde fica", "estacionamento", "como chegar"]
     },
     {
       "id": "operacao.entrega",
@@ -28,7 +28,7 @@
       "visibilidade": "publico",
       "titulo": "Entrega e prazos",
       "pergunta": "A empresa entrega? Em quais regiões, com que prazo e a que custo? Há retirada no local?",
-      "chaves": ["entrega", "frete", "prazo", "retirada"]
+      "chaves": ["entrega", "frete", "prazo", "retirada", "entregam", "entregar", "retirar"]
     },
     {
       "id": "vendas.oferta",
@@ -46,7 +46,7 @@
       "visibilidade": "publico",
       "titulo": "Formas de pagamento",
       "pergunta": "Quais formas de pagamento são aceitas? Parcela em quantas vezes? Há desconto à vista?",
-      "chaves": ["pagamento", "pix", "cartao", "boleto", "parcelamento"]
+      "chaves": ["pagamento", "pix", "cartao", "boleto", "parcelamento", "parcela", "parcelam", "parcelar", "credito", "debito"]
     },
     {
       "id": "vendas.troca",
@@ -55,7 +55,7 @@
       "visibilidade": "publico",
       "titulo": "Troca, devolução e garantia",
       "pergunta": "Qual a política de troca, devolução e garantia? Quais prazos e condições?",
-      "chaves": ["troca", "devolucao", "garantia"]
+      "chaves": ["troca", "devolucao", "garantia", "trocar", "devolver", "defeito"]
     },
     {
       "id": "vendas.orcamento",
@@ -82,7 +82,7 @@
       "visibilidade": "publico",
       "titulo": "Segunda via e atraso de pagamento",
       "pergunta": "Como o cliente obtém segunda via de boleto ou nota? O que acontece em caso de atraso?",
-      "chaves": ["segunda via", "boleto", "nota fiscal", "atraso"]
+      "chaves": ["segunda via", "boleto", "nota fiscal", "atraso", "juros", "multa", "vencido"]
     },
     {
       "id": "estoque.falta",
@@ -91,7 +91,7 @@
       "visibilidade": "publico",
       "titulo": "Produto em falta",
       "pergunta": "Quando um item está em falta, o que dizer ao cliente? Há encomenda, prazo de reposição ou lista de espera?",
-      "chaves": ["falta", "sem estoque", "encomenda", "reposicao"]
+      "chaves": ["falta", "sem estoque", "encomenda", "reposicao", "acabou", "encomendar"]
     },
     {
       "id": "clientes.cadastro",
@@ -109,7 +109,7 @@
       "visibilidade": "interno",
       "titulo": "Reclamações e casos sensíveis",
       "pergunta": "Quais assuntos devem ir direto para uma pessoa (reclamação, cancelamento, problema grave)? Quem assume?",
-      "chaves": ["reclamacao", "cancelamento", "transferir"]
+      "chaves": ["reclamacao", "cancelamento", "transferir", "reclamar", "cancelar"]
     },
     {
       "id": "marketing.promocoes",

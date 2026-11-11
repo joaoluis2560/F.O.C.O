@@ -43,17 +43,22 @@ const INSTRUCOES: Record<Perfil, string> = {
     "identifique-o primeiro pelo telefone e use o cliente_id devolvido.",
 };
 
-interface Ferramenta {
+export interface Ferramenta {
   name: string;
   description: string;
   inputSchema: Record<string, unknown>;
+  annotations: { readOnlyHint: boolean };
 }
 
-type ResultadoFerramenta = { content: { type: "text"; text: string }[]; isError?: boolean };
+// Tudo que este servidor expõe é leitura. Clientes como o Hermes usam a marca
+// para não pedir confirmação a cada chamada e para repetir com segurança.
+const SO_LEITURA = { readOnlyHint: true };
+
+export type ResultadoFerramenta = { content: { type: "text"; text: string }[]; isError?: boolean };
 
 const nomeFerramenta = (capacidade: string) => capacidade.replace(".", "_");
 
-async function sha256Hex(texto: string): Promise<string> {
+export async function sha256Hex(texto: string): Promise<string> {
   const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(texto));
   return [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, "0")).join("");
 }
@@ -128,6 +133,7 @@ function listarFerramentas(perfil: Perfil, capacidades: Capacidade[]): Ferrament
         dominio: { type: "string", enum: [...DOMINIOS] },
       },
     },
+    annotations: SO_LEITURA,
   };
   return [
     cerebro,
@@ -135,6 +141,7 @@ function listarFerramentas(perfil: Perfil, capacidades: Capacidade[]): Ferrament
       name: nomeFerramenta(cap.nome),
       description: cap.descricao,
       inputSchema: esquemaDeEntrada(perfil, cap),
+      annotations: SO_LEITURA,
     })),
   ];
 }
@@ -242,7 +249,7 @@ async function chamarFerramenta(
  * Lê o corpo até `max` bytes. Devolve null se passar do limite, sem acumular
  * o excedente: a leitura é cancelada assim que o limite é ultrapassado.
  */
-async function lerCorpoLimitado(req: Request, max: number): Promise<string | null> {
+export async function lerCorpoLimitado(req: Request, max: number): Promise<string | null> {
   const declarado = Number(req.headers.get("content-length"));
   if (Number.isFinite(declarado) && declarado > max) {
     await req.body?.cancel();
@@ -348,4 +355,33 @@ export async function tratarMcp(req: Request, deps: Dependencias): Promise<Respo
     default:
       return erroRpc(msg.id, -32601, "método não suportado");
   }
+}
+
+// Uso em processo (sem HTTP) pelo agente de atendimento. As mesmas regras de
+// perfil valem; o `contato` vem da entrada do canal, que é quem sabe de quem é
+// a mensagem.
+
+/** Ferramentas que o perfil da credencial pode usar neste tenant. */
+export async function ferramentasDe(deps: Dependencias, cred: Credencial): Promise<Ferramenta[]> {
+  const conectores = await deps.repo.conectoresAprovados(cred.tenant_id);
+  return listarFerramentas(
+    cred.perfil,
+    capacidadesVisiveis(cred.perfil, deps.catalogo, conectores),
+  );
+}
+
+export async function executarFerramenta(
+  deps: Dependencias,
+  cred: Credencial,
+  contato: string | null,
+  nome: string,
+  argumentos: unknown,
+): Promise<ResultadoFerramenta> {
+  const chamada: Chamada = {
+    cred,
+    deps,
+    conectores: await deps.repo.conectoresAprovados(cred.tenant_id),
+    contato: cred.perfil === "atendimento" ? contato : null,
+  };
+  return chamarFerramenta(chamada, nome, argumentos);
 }

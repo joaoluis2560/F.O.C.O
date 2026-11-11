@@ -34,8 +34,8 @@ Deno.test("respostas viram fatos propostos; em branco fica pendente", () => {
     titulo: "Horário de atendimento",
     texto: "Segunda a sexta, 8h às 18h.",
     visibilidade: "publico",
-    chaves: ["horario", "funcionamento", "aberto", "feriado"],
-    fonte: "pacote:base@1#operacao.horario",
+    chaves: pacote.perguntas.find((p) => p.id === "operacao.horario")!.chaves,
+    fonte: "pacote:base@2#operacao.horario",
   });
   assertEquals(r.fatos[1].visibilidade, "interno");
   assertEquals(r.pendentes.includes("vendas.troca"), true);

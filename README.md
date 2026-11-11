@@ -22,6 +22,13 @@ Arquitetura, decisões e fases: [docs/plano.md](docs/plano.md).
   conectores de leitura a agentes externos, com token por tenant e dois perfis
   (`atendimento` e `equipe`).
 
+- **Piloto interno com Hermes:** kit em [piloto/](piloto/README.md) com empresa de
+  exemplo, servidor MCP no host e configuração travada do Hermes.
+
+- **Agente de atendimento (cliente final):** entrada do Chatwoot, fila em lote,
+  roteador em três níveis (regra sem modelo, modelo barato, modelo forte), modo
+  sombra, tetos de gasto e registro de custo por mensagem.
+
 ## Requisitos
 
 - [Supabase CLI](https://supabase.com/docs/guides/cli) 2.116+
@@ -80,6 +87,46 @@ supabase start           # banco + gateway + runtime de funções
 deno task integracao     # MCP de ponta a ponta contra o banco local
 ```
 
+### Agente de atendimento
+
+Atende o cliente final. A mensagem chega pelo Chatwoot (`/functions/v1/chatwoot?t=<token do canal>`),
+entra na fila e é processada pelo worker (`/functions/v1/atendimento-worker`):
+
+1. Espera o cliente parar de digitar e junta as mensagens da conversa em um lote.
+2. **Nível 0, sem modelo:** pessoa da equipe já respondeu, limite por contato, teto diário,
+   anexo sem texto.
+3. **Nível 1, modelo barato:** responde com as ferramentas do perfil `atendimento` (fatos
+   públicos e dados do próprio cliente). Pode transferir para a equipe ou escalar.
+4. **Nível 2, modelo forte:** só quando o barato escala, falha ou erra as ferramentas.
+5. Entrega: no modo `sombra` vira nota interna para a equipe; no modo `producao` vai ao cliente.
+   Cada decisão fica em `atendimento.execucoes`, com tokens e custo.
+
+O telefone do cliente vem do canal, nunca do modelo. O agente só consulta; pedido, cancelamento
+e reclamação são transferidos.
+
+```bash
+deno task simular                 # 8 perguntas de cliente, modelo real, canal falso, com custo
+deno task simular "sua pergunta"  # uma pergunta
+```
+
+A simulação usa `OPENROUTER_API_KEY` de `piloto/hermes/.env` e a empresa de exemplo
+(`deno task piloto:preparar`). Modelos: `FOCO_MODELO_BARATO` e `FOCO_MODELO_FORTE`.
+
+O worker é disparado pelo próprio banco: a cada 5 segundos o `pg_cron` confere se há lote pronto
+e, havendo, chama a função pelo `pg_net`. Fila vazia não gera chamada. Endereço e credencial
+ficam no Vault (`foco_worker_url`, `foco_worker_jwt`); sem eles o disparo não faz nada.
+
+```bash
+deno task agendar:local            # liga o disparo no ambiente local
+deno task agendar:local desligar
+```
+
+Do envio do cliente à resposta: 8 s de espera (ele pode estar digitando) + até 5 s do disparo +
+o tempo do modelo. `deno task banco` recria o banco e desliga o disparo local.
+
+Ainda não feito: áudio e imagem, regra de horário, aprovação de escrita.
+O adaptador do Chatwoot segue a documentação pública e não rodou contra uma instância real.
+
 ## Regras do repositório
 
 - Trabalho só em ambiente local ou staging. Migrations são criadas e testadas
@@ -102,6 +149,7 @@ supabase/functions/_shared/    código das Edge Functions (Deno)
   conectores/                  executor, proteção SSRF, tipos
   cerebro/                     pacote de domínio e ingestão de material
   mcp/                         servidor MCP e acesso a dados
+  atendimento/                 agente de atendimento: canal, roteador, worker
 supabase/functions/mcp/        Edge Function do servidor MCP
 ferramentas/construtor/        gera e testa rascunhos de conector
 ferramentas/erp-simulado/      sistema falso, OpenAPI e conectores de referência

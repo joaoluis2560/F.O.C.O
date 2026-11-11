@@ -169,6 +169,12 @@ Deno.test("servidor MCP", async (t) => {
         x.name === "pedidos_status"
       );
       assertEquals(pedidos.inputSchema.required, ["cliente_id"]);
+      assertEquals(
+        r.corpo.result.tools.every((x: { annotations: { readOnlyHint: boolean } }) =>
+          x.annotations.readOnlyHint === true
+        ),
+        true,
+      );
     });
 
     await t.step("busca no cérebro usa o perfil da credencial", async () => {

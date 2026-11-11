@@ -1,12 +1,17 @@
 {
   "tasks": {
-    "verificar": "deno fmt --check && deno lint && deno check supabase/functions ferramentas && deno test --allow-net=127.0.0.1 --allow-read=. --allow-env",
+    "verificar": "deno fmt --check && deno lint && deno check supabase/functions ferramentas piloto/preparar.ts piloto/verificar.ts && deno test --allow-net=127.0.0.1 --allow-read=. --allow-env",
     "segredos": "gitleaks git --redact --no-banner .",
     "banco": "supabase db reset && supabase db lint --level warning --fail-on warning && supabase test db",
     "erp-simulado": "deno run --allow-net=127.0.0.1 --allow-env --allow-read=. ferramentas/erp-simulado/servidor.ts",
     "construtor": "deno run --allow-net --allow-env --allow-read=. --allow-write=. ferramentas/construtor/cli.ts",
-    "integracao": "FOCO_DB_URL=postgresql://postgres:postgres@127.0.0.1:56322/postgres deno test --allow-net=127.0.0.1 --allow-read=. --allow-env supabase/functions/_shared/mcp/integracao_test.ts",
-    "credencial": "deno run ferramentas/credencial.ts"
+    "integracao": "FOCO_DB_URL=postgresql://postgres:postgres@127.0.0.1:56322/postgres deno test --allow-net=127.0.0.1 --allow-read=. --allow-env supabase/functions/_shared/mcp/integracao_test.ts supabase/functions/_shared/atendimento/integracao_test.ts",
+    "credencial": "deno run ferramentas/credencial.ts",
+    "mcp-local": "FOCO_DB_URL=postgresql://postgres:postgres@127.0.0.1:56322/postgres deno run --allow-net --allow-env --allow-read=. ferramentas/mcp_local.ts",
+    "piloto:preparar": "FOCO_DB_URL=postgresql://postgres:postgres@127.0.0.1:56322/postgres deno run --allow-net=127.0.0.1 --allow-env --allow-read=. --allow-write=piloto/hermes piloto/preparar.ts",
+    "piloto:verificar": "deno run --allow-net=127.0.0.1 --allow-read=piloto/hermes piloto/verificar.ts",
+    "simular": "FOCO_DB_URL=postgresql://postgres:postgres@127.0.0.1:56322/postgres deno run --env-file=piloto/hermes/.env --allow-net --allow-env --allow-read=. ferramentas/simular_atendimento.ts",
+    "agendar:local": "FOCO_DB_URL=postgresql://postgres:postgres@127.0.0.1:56322/postgres deno run --allow-net=127.0.0.1 --allow-env --allow-run=docker ferramentas/agendar_local.ts"
   },
   "imports": {
     "@std/assert": "jsr:@std/assert@^1.0.0",
@@ -21,20 +26,26 @@
   "fmt": {
     "include": [
       "supabase/functions/",
-      "ferramentas/"
+      "ferramentas/",
+      "piloto/"
     ],
-    "lineWidth": 100
+    "lineWidth": 100,
+    "exclude": [
+      "piloto/hermes/dados/"
+    ]
   },
   "lint": {
     "include": [
       "supabase/functions/",
-      "ferramentas/"
+      "ferramentas/",
+      "piloto/"
     ]
   },
   "test": {
     "include": [
       "supabase/functions/",
-      "ferramentas/"
+      "ferramentas/",
+      "piloto/"
     ]
   }
 }

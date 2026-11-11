@@ -1,0 +1,25 @@
+# Hermes do piloto interno. Uso:
+#   deno task piloto:preparar      (gera .env)
+#   docker compose run --rm hermes
+#
+# O contêiner não publica portas e só fala com o host pelo MCP do F.O.C.O.
+services:
+  hermes:
+    image: nousresearch/hermes-agent:stable
+    env_file: .env
+    environment:
+      - HERMES_UID=${HERMES_UID:-10000}
+      - HERMES_GID=${HERMES_GID:-10000}
+    volumes:
+      # Volume do Docker, não pasta do host: o Hermes exige permissão restrita em
+      # um socket interno, e pasta montada do macOS não preserva permissões.
+      - hermes-dados:/opt/data
+      - ./config.yaml:/opt/data/config.yaml
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    stdin_open: true
+    tty: true
+    command: ["chat", "--model", "${HERMES_MODELO:?defina HERMES_MODELO em .env}"]
+
+volumes:
+  hermes-dados:

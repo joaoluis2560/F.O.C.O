@@ -1,0 +1,15 @@
+{
+  "operacao.horario": "Atendemos de segunda a sexta, das 8h às 18h, e aos sábados das 8h às 12h. Fechamos aos domingos e feriados.",
+  "operacao.endereco": "Rua das Ferramentas, 120, Centro. Estacionamento gratuito para clientes ao lado da loja.",
+  "operacao.entrega": "Entregamos na região metropolitana em até 2 dias úteis. Frete grátis para compras acima de R$ 500; abaixo disso, R$ 25. Retirada na loja no mesmo dia.",
+  "vendas.oferta": "Somos uma loja de ferragens e materiais de construção: ferramentas manuais e elétricas, parafusos e fixadores, tintas e acessórios de pintura.",
+  "vendas.pagamento": "Aceitamos Pix, cartão de débito e crédito (até 6 vezes sem juros acima de R$ 300) e boleto para clientes com cadastro aprovado. Pix tem 3% de desconto.",
+  "vendas.troca": "Trocas em até 30 dias com nota fiscal e produto sem uso, na embalagem original. Ferramentas elétricas têm garantia de 12 meses do fabricante.",
+  "vendas.orcamento": "Para orçamento, o cliente informa os itens e quantidades. Para fechar pedido com entrega, precisamos de nome completo, CPF ou CNPJ e endereço.",
+  "vendas.desconto": "Vendedor pode dar até 5% de desconto sem consultar. Acima disso, só com aprovação da gerência. Nunca somar desconto de vendedor com o desconto do Pix.",
+  "financeiro.cobranca": "Segunda via de boleto é enviada pelo próprio atendimento. Após 5 dias de atraso há multa de 2% e juros de 1% ao mês.",
+  "estoque.falta": "Item em falta pode ser encomendado, com prazo médio de 7 dias úteis. Avisamos o cliente quando chegar.",
+  "clientes.reclamacao": "Reclamação, pedido de cancelamento e produto com defeito vão direto para a gerência. O atendimento só registra e avisa que alguém vai retornar no mesmo dia.",
+  "marketing.tom": "Tratamento por você, tom cordial e direto, sem gírias. Emoji só se o cliente usar primeiro.",
+  "geral.limites": "O atendimento automático não promete prazo de entrega fora do padrão, não negocia desconto e não confirma disponibilidade sem consultar o estoque."
+}

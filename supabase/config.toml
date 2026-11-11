@@ -416,3 +416,11 @@ enabled = true
 # Autenticação própria: token por tenant conferido na função.
 verify_jwt = false
 import_map = "../deno.json"
+
+[functions.chatwoot]
+# Autenticação própria: token do canal na URL do webhook.
+verify_jwt = false
+import_map = "../deno.json"
+
+[functions.atendimento-worker]
+import_map = "../deno.json"

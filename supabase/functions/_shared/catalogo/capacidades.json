@@ -6,7 +6,7 @@
       "dominio": "clientes",
       "tipo": "leitura",
       "identidade": "nenhuma",
-      "descricao": "Localiza o cadastro do cliente pelo telefone de quem está falando. O telefone é fornecido pelo servidor, nunca pelo modelo.",
+      "descricao": "Localiza o cadastro de um cliente pelo número de telefone (só dígitos, com código do país) e devolve o cliente_id usado nas outras consultas.",
       "entrada": {
         "type": "object",
         "additionalProperties": false,
