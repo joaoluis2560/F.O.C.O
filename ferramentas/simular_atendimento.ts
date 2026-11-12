@@ -99,8 +99,9 @@ const repo = criarRepositorioAtendimento(url);
 const nucleo = criarRepositorioPg(url);
 
 try {
-  const [tenant] = await sql`select id from nucleo.tenants where slug = 'loja-piloto'`;
-  if (!tenant) throw new Error("empresa de exemplo ausente: rode `deno task piloto:preparar`");
+  const slug = Deno.env.get("FOCO_EMPRESA") ?? "loja-piloto";
+  const [tenant] = await sql`select id from nucleo.tenants where slug = ${slug}`;
+  if (!tenant) throw new Error(`empresa ${slug} ausente: rode a preparação do piloto`);
 
   // Canal e configuração de simulação (recriados a cada execução).
   await sql`delete from atendimento.canais where tenant_id = ${tenant.id} and nome = 'simulacao'`;

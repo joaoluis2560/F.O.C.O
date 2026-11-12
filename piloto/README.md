@@ -3,8 +3,8 @@
 Copiloto da equipe: dono e funcionários conversam com um agente Hermes que consulta o cérebro da
 empresa e o sistema de gestão pelo servidor MCP do F.O.C.O.
 
-Nesta primeira etapa a conversa é pelo terminal e o agente **só consulta**. WhatsApp e ações de
-escrita entram depois.
+Nesta etapa a conversa é pelo terminal. No sistema de gestão o agente **só consulta**; o que a
+equipe ensina vira proposta para o dono aprovar. WhatsApp entra depois.
 
 ```
 funcionário ── Hermes (Docker) ── MCP do F.O.C.O (host) ── Postgres local
@@ -93,6 +93,36 @@ Cada pergunta levou de 11 a 22 segundos. Custo por pergunta não foi medido.
 Ajuste que foi necessário: os dados do Hermes ficam em um volume do Docker, não em pasta do host. O
 Hermes exige permissão restrita em um socket interno, e pasta montada do macOS não preserva
 permissões.
+
+## Ensinar o agente
+
+O Hermes registra o que a equipe ensina como **proposta**, que só vale depois de aprovada:
+
+- "A dona avisou que agora aceitamos vale-refeição acima de R$ 50. Registra." → fato proposto.
+- "O atendimento nunca deve usar emoji." → orientação proposta.
+- "O que está esperando aprovação?" → lista da fila.
+
+Verificado em 11/11/2026 com Hermes e modelo reais: as duas propostas entraram na fila; antes de
+aprovar, o atendimento respondeu que não aceitava vale-refeição; depois de aprovar como dona, passou
+a responder que aceita, e as 8 respostas de teste saíram sem emoji (antes, 1 a 2 tinham).
+
+A aprovação ainda não tem tela: foi feita direto no banco, com a identidade da dona.
+
+## Implantação guiada de uma empresa nova
+
+```bash
+deno task piloto:implantar otica "Ótica Boa Vista"
+cd piloto/hermes && docker compose run --rm hermes
+```
+
+Diga ao Hermes que quer configurar o atendimento. Ele busca o roteiro do segmento, pergunta em
+blocos, registra cada resposta como proposta e oferece as orientações de partida do nicho.
+Verificado em 11/11/2026 com Hermes e modelo reais, para uma ótica: três respostas e cinco
+orientações registradas; depois de aprovadas (`deno task piloto:aprovar otica`), o atendimento
+respondeu certo sobre validade de receita, prazo de multifocal e exame de vista, e recusou
+interpretar o grau de uma receita, encaminhando ao oftalmologista.
+
+Supermercado tem roteiro escrito e testado, mas não foi exercitado com o Hermes.
 
 ## Limites conhecidos
 

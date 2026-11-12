@@ -1,8 +1,13 @@
 import { assert, assertEquals } from "@std/assert";
 import { carregarCatalogo, carregarConector, subirErp } from "../conectores/apoio_teste.ts";
 import type { Catalogo, Integracao } from "../conectores/tipos.ts";
-import type { ConectorAtivo, Credencial, Repositorio } from "./repositorio.ts";
-import { MAX_CORPO, tratarMcp } from "./servidor.ts";
+import {
+  type ConectorAtivo,
+  type Credencial,
+  FilaDeRevisaoCheia,
+  type Repositorio,
+} from "./repositorio.ts";
+import { executarFerramenta, ferramentasDe, MAX_CORPO, tratarMcp } from "./servidor.ts";
 import { gerarTokenSessao } from "./sessao.ts";
 
 const mapa = await carregarCatalogo();
@@ -49,7 +54,29 @@ async function repoFalso(integracao: Integracao, segredo: string) {
     sessoes.set(hash, { tenant, contato });
     return token;
   };
+  const propostas: { tipo: string; tenant: string; dados: unknown }[] = [];
+  const implantacao: { segmento: string | null; respondidas: string[] } = {
+    segmento: null,
+    respondidas: [],
+  };
+  let filaCheia = false;
   const repo: Repositorio = {
+    proporFato: (tenant, fato) => {
+      if (filaCheia) return Promise.reject(new FilaDeRevisaoCheia());
+      propostas.push({ tipo: "fato", tenant, dados: fato });
+      return Promise.resolve();
+    },
+    proporOrientacao: (tenant, categoria, texto, justificativa) => {
+      if (filaCheia) return Promise.reject(new FilaDeRevisaoCheia());
+      propostas.push({ tipo: "orientacao", tenant, dados: { categoria, texto, justificativa } });
+      return Promise.resolve();
+    },
+    propostasPendentes: () => Promise.resolve({ total: propostas.length, itens: [] }),
+    implantacao: () => Promise.resolve(implantacao),
+    ignorarPergunta: (_tenant, id) => {
+      implantacao.respondidas.push(`pacote:ignorada#${id}`);
+      return Promise.resolve();
+    },
     identificarCredencial: (hash) => Promise.resolve(credenciais.get(hash) ?? null),
     contatoDaSessao: (tenant, hash) => {
       const sessao = sessoes.get(hash);
@@ -71,7 +98,15 @@ async function repoFalso(integracao: Integracao, segredo: string) {
       }]);
     },
   };
-  return { repo, execucoes, buscas, abrirSessao };
+  return {
+    repo,
+    execucoes,
+    buscas,
+    abrirSessao,
+    propostas,
+    implantacao,
+    encherFila: (cheia: boolean) => (filaCheia = cheia),
+  };
 }
 
 interface Opcoes {
@@ -113,7 +148,11 @@ const nomes = (corpo: any): string[] => corpo.result.tools.map((t: { name: strin
 
 Deno.test("servidor MCP", async (t) => {
   const { erp, integracao, segredo, parar } = subirErp();
-  const { repo, execucoes, buscas, abrirSessao } = await repoFalso(integracao, segredo);
+  const { repo, execucoes, buscas, abrirSessao, propostas, implantacao, encherFila } =
+    await repoFalso(
+      integracao,
+      segredo,
+    );
   const rpc = cliente(repo);
   const MARIA = await abrirSessao("5511999990001");
   const JOAO = await abrirSessao("5511999990002");
@@ -169,11 +208,12 @@ Deno.test("servidor MCP", async (t) => {
         x.name === "pedidos_status"
       );
       assertEquals(pedidos.inputSchema.required, ["cliente_id"]);
+      // Tudo é leitura, menos as duas ferramentas que registram propostas.
       assertEquals(
-        r.corpo.result.tools.every((x: { annotations: { readOnlyHint: boolean } }) =>
-          x.annotations.readOnlyHint === true
-        ),
-        true,
+        r.corpo.result.tools
+          .filter((x: { annotations: { readOnlyHint: boolean } }) => !x.annotations.readOnlyHint)
+          .map((x: { name: string }) => x.name),
+        ["cerebro_propor_fato", "atendimento_propor_orientacao", "implantacao_nao_se_aplica"],
       );
     });
 
@@ -306,6 +346,231 @@ Deno.test("servidor MCP", async (t) => {
       assert(r.corpo.result.content[0].text.startsWith("http_erro"));
     });
 
+    await t.step("propostas: só o perfil equipe vê e chama", async () => {
+      const equipe = nomes((await rpc("tools/list", {}, { token: TOKEN_EQUIPE })).corpo);
+      for (
+        const f of [
+          "cerebro_propor_fato",
+          "atendimento_propor_orientacao",
+          "propostas_pendentes",
+          "implantacao_pendencias",
+          "implantacao_nao_se_aplica",
+        ]
+      ) {
+        assert(equipe.includes(f), f);
+        const r = await rpc("tools/call", { name: f, arguments: {} }, { sessao: MARIA });
+        assertEquals(r.corpo.result.content[0].text, "ferramenta desconhecida", f);
+      }
+      assertEquals(propostas.length, 0);
+    });
+
+    await t.step("propostas: ferramentas que escrevem não são marcadas como leitura", async () => {
+      const { tools } = (await rpc("tools/list", {}, { token: TOKEN_EQUIPE })).corpo.result;
+      const marca = (n: string) =>
+        tools.find((x: { name: string }) => x.name === n).annotations.readOnlyHint;
+      assertEquals(
+        [
+          marca("cerebro_propor_fato"),
+          marca("atendimento_propor_orientacao"),
+          marca("propostas_pendentes"),
+        ],
+        [false, false, true],
+      );
+    });
+
+    await t.step(
+      "propostas: fato e orientação entram na fila do tenant da credencial",
+      async () => {
+        const o = { token: TOKEN_EQUIPE };
+        const fato = await rpc("tools/call", {
+          name: "cerebro_propor_fato",
+          arguments: { titulo: "Aceita Pix", texto: "Pix com 3% de desconto.", chaves: ["pix"] },
+        }, o);
+        assert(fato.corpo.result.content[0].text.includes("depois que o dono"));
+        const orientacao = await rpc("tools/call", {
+          name: "atendimento_propor_orientacao",
+          arguments: { categoria: "tom", texto: "Sem emoji.", justificativa: "A dona pediu." },
+        }, o);
+        assertEquals(orientacao.corpo.result.isError, undefined);
+        assertEquals(propostas, [
+          {
+            tipo: "fato",
+            tenant: "tenant-a",
+            dados: {
+              titulo: "Aceita Pix",
+              texto: "Pix com 3% de desconto.",
+              dominio: "geral",
+              visibilidade: "interno",
+              chaves: ["pix"],
+            },
+          },
+          {
+            tipo: "orientacao",
+            tenant: "tenant-a",
+            dados: { categoria: "tom", texto: "Sem emoji.", justificativa: "A dona pediu." },
+          },
+        ]);
+      },
+    );
+
+    await t.step("propostas: entrada inválida e visibilidade restrita são recusadas", async () => {
+      const o = { token: TOKEN_EQUIPE };
+      const antes = propostas.length;
+      const casos: [string, Record<string, unknown>][] = [
+        ["cerebro_propor_fato", { titulo: "x", texto: "curto demais no título" }],
+        ["cerebro_propor_fato", { titulo: "Margem", texto: "32%", visibilidade: "restrito" }],
+        ["cerebro_propor_fato", { titulo: "Certo", texto: "texto", dominio: "juridico" }],
+        ["cerebro_propor_fato", { titulo: "Certo", texto: "texto", chaves: "pix" }],
+        ["atendimento_propor_orientacao", { categoria: "preco", texto: "Dar desconto." }],
+        ["atendimento_propor_orientacao", { categoria: "tom", texto: "x".repeat(601) }],
+      ];
+      for (const [name, args] of casos) {
+        const r = await rpc("tools/call", { name, arguments: args }, o);
+        assertEquals(r.corpo.result.isError, true, JSON.stringify(args).slice(0, 60));
+      }
+      assertEquals(propostas.length, antes);
+    });
+
+    await t.step("propostas: fila cheia vira aviso para a equipe, não erro interno", async () => {
+      encherFila(true);
+      const r = await rpc("tools/call", {
+        name: "atendimento_propor_orientacao",
+        arguments: { categoria: "tom", texto: "Mais uma." },
+      }, { token: TOKEN_EQUIPE });
+      encherFila(false);
+      assertEquals(r.status, 200);
+      assertEquals(r.corpo.result.isError, true);
+      assert(r.corpo.result.content[0].text.includes("fila de revisão está cheia"));
+    });
+
+    await t.step(
+      "implantação: roteiro do segmento, o que falta e orientações sugeridas",
+      async () => {
+        const o = { token: TOKEN_EQUIPE };
+        implantacao.segmento = "otica";
+        implantacao.respondidas = [];
+        const inicio = conteudo(
+          (await rpc("tools/call", { name: "implantacao_pendencias", arguments: {} }, o)).corpo,
+        );
+        assertEquals([inicio.segmento, inicio.respondidas], ["otica", 0]);
+        assertEquals(inicio.proximas_perguntas.length, 4);
+        assertEquals(inicio.proximas_perguntas[0].pergunta_id, "otica.receita");
+        assertEquals(inicio.proximas_perguntas[0].registrar_com, "cerebro_propor_fato");
+        assert(
+          inicio.orientacoes_sugeridas_para_o_segmento.some((x: { pergunta_id: string }) =>
+            x.pergunta_id === "otica.limite.saude"
+          ),
+        );
+
+        // Respondidas saem da lista, inclusive orientação sugerida já registrada.
+        implantacao.respondidas = [
+          "pacote:otica@3001#otica.receita",
+          "pacote:otica@3001#otica.limite.saude",
+          "material:site",
+        ];
+        const depois = conteudo(
+          (await rpc("tools/call", { name: "implantacao_pendencias", arguments: {} }, o)).corpo,
+        );
+        assertEquals(depois.respondidas, 1);
+        assertEquals(depois.proximas_perguntas[0].pergunta_id, "otica.exame");
+        // As demais em aberto vêm só com id e assunto, para ligar resposta adiantada.
+        assertEquals(
+          depois.proximas_perguntas.length + depois.outras_perguntas_em_aberto.length,
+          depois.perguntas_no_roteiro - 1,
+        );
+        assert(
+          depois.outras_perguntas_em_aberto.some((x: { pergunta_id: string; assunto: string }) =>
+            x.pergunta_id === "otica.convenios" && x.assunto === "Convênios e parcerias"
+          ),
+        );
+        assert(
+          !depois.orientacoes_sugeridas_para_o_segmento.some((x: { pergunta_id: string }) =>
+            x.pergunta_id === "otica.limite.saude"
+          ),
+        );
+      },
+    );
+
+    await t.step("implantação: resposta herda da pergunta e fica ligada a ela", async () => {
+      const o = { token: TOKEN_EQUIPE };
+      implantacao.segmento = "otica";
+      propostas.length = 0;
+      await rpc("tools/call", {
+        name: "cerebro_propor_fato",
+        arguments: {
+          pergunta_id: "otica.prazo",
+          texto: "5 dias úteis; multifocal, 10.",
+          // O agente tenta decidir o que o roteiro já define: vale o roteiro.
+          titulo: "Título inventado",
+          dominio: "clientes",
+          visibilidade: "interno",
+          chaves: ["entrega dos oculos", "prazo"],
+        },
+      }, o);
+      await rpc("tools/call", {
+        name: "atendimento_propor_orientacao",
+        arguments: { pergunta_id: "otica.limite.saude", texto: "Não interpretar receita." },
+      }, o);
+      await rpc("tools/call", {
+        name: "atendimento_propor_orientacao",
+        arguments: { pergunta_id: "marketing.tom", texto: "Tratar por você." },
+      }, o);
+      // deno-lint-ignore no-explicit-any
+      const [fato, limite, tom] = propostas.map((p) => p.dados as any);
+      assertEquals(fato.titulo, "Prazo para os óculos ficarem prontos");
+      assertEquals([fato.dominio, fato.visibilidade, fato.tipo], [
+        "operacao",
+        "publico",
+        "informacao",
+      ]);
+      // Chaves do roteiro primeiro, somadas às do agente, sem repetir.
+      assertEquals(fato.chaves, [
+        "prazo",
+        "fica pronto",
+        "quando fica pronto",
+        "multifocal",
+        "entrega dos oculos",
+      ]);
+      assert(fato.fonte.endsWith("#otica.prazo"));
+      assertEquals([limite.categoria, tom.categoria], ["limite", "tom"]);
+    });
+
+    await t.step("implantação: pergunta que não se aplica deixa de ser feita", async () => {
+      const o = { token: TOKEN_EQUIPE };
+      implantacao.segmento = "otica";
+      implantacao.respondidas = [];
+      const marcar = (pergunta_id: string) =>
+        rpc("tools/call", { name: "implantacao_nao_se_aplica", arguments: { pergunta_id } }, o);
+      assertEquals((await marcar("otica.receita")).corpo.result.isError, undefined);
+      const depois = conteudo(
+        (await rpc("tools/call", { name: "implantacao_pendencias", arguments: {} }, o)).corpo,
+      );
+      assertEquals(depois.proximas_perguntas[0].pergunta_id, "otica.exame");
+      // Só perguntas do roteiro da empresa podem ser marcadas.
+      assertEquals((await marcar("supermercado.delivery")).corpo.result.isError, true);
+      assertEquals((await marcar("otica.limite.saude")).corpo.result.isError, true);
+      implantacao.respondidas = [];
+    });
+
+    await t.step("implantação: pergunta inexistente ou ferramenta trocada é recusada", async () => {
+      const o = { token: TOKEN_EQUIPE };
+      implantacao.segmento = "otica";
+      const antes = propostas.length;
+      const casos: [string, Record<string, unknown>][] = [
+        ["cerebro_propor_fato", { pergunta_id: "supermercado.delivery", texto: "Entregamos." }],
+        ["cerebro_propor_fato", { pergunta_id: "marketing.tom", texto: "Tratar por você." }],
+        ["cerebro_propor_fato", { pergunta_id: "otica.limite.saude", texto: "Não interpretar." }],
+        ["atendimento_propor_orientacao", { pergunta_id: "otica.prazo", texto: "5 dias." }],
+      ];
+      for (const [name, args] of casos) {
+        const r = await rpc("tools/call", { name, arguments: args }, o);
+        assertEquals(r.corpo.result.isError, true, JSON.stringify(args));
+      }
+      assertEquals(propostas.length, antes);
+      implantacao.segmento = null;
+      implantacao.respondidas = [];
+    });
+
     await t.step("corpo acima do limite: 413 pelo Content-Length, sem ler", async () => {
       let lido = false;
       const corpo = new ReadableStream<Uint8Array>({
@@ -386,6 +651,58 @@ Deno.test("servidor MCP", async (t) => {
       const vazio: Repositorio = { ...repo, conectoresAprovados: () => Promise.resolve([]) };
       assertEquals(nomes((await cliente(vazio)("tools/list")).corpo), ["cerebro_buscar"]);
     });
+  } finally {
+    await parar();
+  }
+});
+
+Deno.test("perfil de implantação: só propostas, sem busca e sem sistema da empresa", async () => {
+  const { integracao, segredo, parar } = subirErp();
+  try {
+    const { repo, buscas, execucoes, propostas, implantacao } = await repoFalso(
+      integracao,
+      segredo,
+    );
+    const deps = { repo, catalogo };
+    const cred: Credencial = {
+      credencial_id: "agente",
+      tenant_id: "tenant-a",
+      perfil: "implantacao",
+    };
+    assertEquals((await ferramentasDe(deps, cred)).map((f) => f.name), [
+      "cerebro_propor_fato",
+      "atendimento_propor_orientacao",
+      "implantacao_pendencias",
+      "propostas_pendentes",
+      "implantacao_nao_se_aplica",
+    ]);
+
+    // O tenant tem conectores aprovados e fatos, mas este perfil não os alcança,
+    // nem informando um telefone de cliente.
+    for (
+      const [nome, args] of [
+        ["cerebro_buscar", { pergunta: "desconto máximo" }],
+        ["estoque_consultar", { produto_id: "P-100" }],
+        ["clientes_identificar", { telefone: "5511999990001" }],
+        ["financeiro_titulos_em_aberto", { cliente_id: "C-1" }],
+      ] as const
+    ) {
+      const r = await executarFerramenta(deps, cred, "5511999990001", nome, args);
+      assertEquals([r.isError, r.content[0].text], [true, "ferramenta desconhecida"], nome);
+    }
+    assertEquals([buscas.length, execucoes.length], [0, 0]);
+
+    implantacao.segmento = "otica";
+    const pendencias = JSON.parse(
+      (await executarFerramenta(deps, cred, null, "implantacao_pendencias", {})).content[0].text,
+    );
+    assertEquals(pendencias.segmento, "otica");
+    const r = await executarFerramenta(deps, cred, null, "cerebro_propor_fato", {
+      pergunta_id: "otica.prazo",
+      texto: "Óculos ficam prontos em 5 dias úteis.",
+    });
+    assertEquals(r.isError, undefined);
+    assertEquals(propostas.map((p) => [p.tipo, p.tenant]), [["fato", "tenant-a"]]);
   } finally {
     await parar();
   }

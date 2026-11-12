@@ -31,6 +31,8 @@ export interface RespostaModelo {
   texto: string;
   chamadas: ChamadaFerramenta[];
   uso: Uso;
+  /** Verdadeiro quando a saída bateu no limite de tokens antes de terminar. */
+  cortada?: boolean;
 }
 
 export type ClienteModelo = (pedido: {
@@ -127,6 +129,7 @@ export function criarClienteOpenRouter(o: OpcoesOpenRouter): ClienteModelo {
         tokens_saida: uso.completion_tokens ?? 0,
         custo_usd: typeof uso.cost === "number" ? uso.cost : 0,
       },
+      cortada: dados.choices[0].finish_reason === "length",
     };
   };
 }

@@ -217,6 +217,93 @@ Deno.test({
         assertEquals((await titulos(tokens.a_atendimento, maria.token)).corpo.error.code, -32602);
       });
 
+      await t.step("equipe propõe; nada vale até o dono aprovar", async () => {
+        const chamar = (token: string, name: string, args: unknown) =>
+          rpc(token, "tools/call", { name, arguments: args });
+        await chamar(tokens.a_equipe, "cerebro_propor_fato", {
+          titulo: "Frete grátis",
+          texto: "Frete grátis acima de R$ 500.",
+          visibilidade: "publico",
+          chaves: ["frete"],
+        });
+        await chamar(tokens.a_equipe, "atendimento_propor_orientacao", {
+          categoria: "tom",
+          texto: "Tratar por você, sem emoji.",
+        });
+        const pendentes = conteudo(
+          (await chamar(tokens.a_equipe, "propostas_pendentes", {})).corpo,
+        );
+        assertEquals(pendentes.total, 2);
+        assertEquals(pendentes.itens.map((i: { tipo: string }) => i.tipo), ["fato", "orientacao"]);
+
+        // Proposto não chega ao atendimento.
+        assertEquals(
+          conteudo((await buscar(tokens.a_atendimento, "frete grátis")).corpo).fatos,
+          [],
+        );
+        const [{ ativas }] = await sql`
+          select count(*)::int as ativas from atendimento.orientacoes
+          where tenant_id = ${a.id} and status = 'ativa'`;
+        assertEquals(ativas, 0);
+
+        // O Tenant B não vê a fila do A, e o perfil atendimento não propõe.
+        assertEquals(
+          conteudo(
+            (await chamar(tokens.b_atendimento, "cerebro_buscar", { pergunta: "frete" })).corpo,
+          )
+            .fatos,
+          [],
+        );
+        const negado = await chamar(tokens.a_atendimento, "cerebro_propor_fato", {
+          titulo: "Invasão",
+          texto: "texto",
+        });
+        assertEquals(negado.corpo.result.isError, true);
+        const [{ total }] = await sql`select atendimento.total_pendente(${a.id}) as total`;
+        assertEquals(total, 2);
+      });
+
+      await t.step("implantação: roteiro segue o segmento e avança com as respostas", async () => {
+        await sql`update nucleo.tenants set segmento = 'supermercado' where id = ${a.id}`;
+        const chamar = (name: string, args: unknown = {}) =>
+          rpc(tokens.a_equipe, "tools/call", { name, arguments: args });
+        const inicio = conteudo((await chamar("implantacao_pendencias")).corpo);
+        assertEquals([inicio.segmento, inicio.respondidas], ["supermercado", 0]);
+        assertEquals(inicio.proximas_perguntas[0].pergunta_id, "supermercado.delivery");
+
+        await chamar("cerebro_propor_fato", {
+          pergunta_id: "supermercado.delivery",
+          texto: "Entregamos no Centro e na Vila Nova, taxa de R$ 8, pedido mínimo de R$ 60.",
+        });
+        await chamar("atendimento_propor_orientacao", {
+          pergunta_id: "supermercado.limite.alcool",
+          texto: "Não vender bebida alcoólica para menor de 18 anos.",
+        });
+        const depois = conteudo((await chamar("implantacao_pendencias")).corpo);
+        assertEquals(depois.respondidas, 1);
+        assertEquals(depois.proximas_perguntas[0].pergunta_id, "supermercado.como_pedir");
+        assertEquals(
+          depois.orientacoes_sugeridas_para_o_segmento.some((o: { pergunta_id: string }) =>
+            o.pergunta_id === "supermercado.limite.alcool"
+          ),
+          false,
+        );
+        const [fato] = await sql`
+          select titulo, visibilidade::text, status::text from cerebro.fatos
+          where tenant_id = ${a.id} and fonte like '%#supermercado.delivery'`;
+        assertEquals([fato.titulo, fato.visibilidade, fato.status], [
+          "Entrega em casa",
+          "publico",
+          "proposto",
+        ]);
+        // O perfil de atendimento não conduz implantação.
+        const negado = await rpc(tokens.a_atendimento, "tools/call", {
+          name: "implantacao_pendencias",
+          arguments: {},
+        });
+        assertEquals(negado.corpo.result.content[0].text, "ferramenta desconhecida");
+      });
+
       await t.step("conector degradado ou integração inativa some das ferramentas", async () => {
         await sql`update integracao.conectores set estado = 'degradado'
                   where tenant_id = ${a.id} and capacidade = 'estoque.consultar'`;

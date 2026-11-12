@@ -1,0 +1,111 @@
+{
+  "versao": 1,
+  "nome": "supermercado",
+  "segmento": "supermercado",
+  "rotulo": "Supermercado",
+  "estende": "base",
+  "descricao": "Perguntas e orientações de partida para supermercados e mercearias. Rascunho: precisa ser revisado com donos de supermercado antes de virar padrão.",
+  "omitir": ["vendas.orcamento"],
+  "capacidades": ["produtos.consultar", "estoque.consultar", "pedidos.status"],
+  "perguntas": [
+    {
+      "id": "supermercado.delivery",
+      "dominio": "operacao",
+      "tipo": "informacao",
+      "visibilidade": "publico",
+      "titulo": "Entrega em casa",
+      "pergunta": "O mercado entrega? Em quais bairros, com que taxa, valor mínimo de pedido e em quais horários?",
+      "chaves": ["delivery", "entrega", "entregam", "taxa de entrega", "pedido minimo"]
+    },
+    {
+      "id": "supermercado.como_pedir",
+      "dominio": "vendas",
+      "tipo": "procedimento",
+      "visibilidade": "publico",
+      "titulo": "Como fazer um pedido",
+      "pergunta": "Como o cliente faz um pedido para entrega ou retirada (lista pelo WhatsApp, site, aplicativo)? O que ele precisa informar?",
+      "chaves": ["pedido", "fazer pedido", "lista", "comprar", "aplicativo"]
+    },
+    {
+      "id": "supermercado.substituicao",
+      "dominio": "operacao",
+      "tipo": "regra",
+      "visibilidade": "publico",
+      "titulo": "Item em falta no pedido",
+      "pergunta": "Quando falta um item do pedido, o mercado substitui por similar, liga para o cliente ou retira do pedido?",
+      "chaves": ["substituir", "substituicao", "faltou", "em falta"]
+    },
+    {
+      "id": "supermercado.ofertas",
+      "dominio": "marketing",
+      "tipo": "informacao",
+      "visibilidade": "publico",
+      "titulo": "Ofertas e encarte",
+      "pergunta": "Onde o cliente vê as ofertas da semana (encarte, rede social, grupo)? Em que dia mudam? Há dia fixo de promoção (carne, hortifruti)?",
+      "chaves": ["oferta", "ofertas", "encarte", "promocao", "dia da carne", "feira"]
+    },
+    {
+      "id": "supermercado.vales",
+      "dominio": "vendas",
+      "tipo": "informacao",
+      "visibilidade": "publico",
+      "titulo": "Vale-alimentação e vale-refeição",
+      "pergunta": "Quais bandeiras de vale-alimentação e vale-refeição são aceitas? Valem também na entrega?",
+      "chaves": ["vale alimentacao", "vale refeicao", "alelo", "sodexo", "ticket", "vr", "va"]
+    },
+    {
+      "id": "supermercado.fidelidade",
+      "dominio": "marketing",
+      "tipo": "informacao",
+      "visibilidade": "publico",
+      "titulo": "Cartão da loja e clube de vantagens",
+      "pergunta": "O mercado tem cartão próprio, clube de descontos ou programa de pontos? Como o cliente participa?",
+      "chaves": ["cartao da loja", "clube", "pontos", "cashback", "fidelidade"]
+    },
+    {
+      "id": "supermercado.setores",
+      "dominio": "operacao",
+      "tipo": "informacao",
+      "visibilidade": "publico",
+      "titulo": "Setores e encomendas",
+      "pergunta": "Quais setores o mercado tem (açougue, padaria, hortifruti, frios, rotisseria)? Aceita encomenda de carne, bolo, salgado ou cesta? Com que antecedência?",
+      "chaves": ["acougue", "padaria", "hortifruti", "encomenda", "bolo", "cesta"]
+    },
+    {
+      "id": "supermercado.troca",
+      "dominio": "vendas",
+      "tipo": "regra",
+      "visibilidade": "publico",
+      "titulo": "Produto com problema",
+      "pergunta": "O que o cliente faz se levar produto vencido, estragado ou errado? Precisa do cupom? Qual o prazo?",
+      "chaves": ["vencido", "estragado", "produto errado", "cupom", "nota"]
+    }
+  ],
+  "orientacoes_padrao": [
+    {
+      "id": "supermercado.limite.preco",
+      "categoria": "limite",
+      "texto": "Não confirmar preço nem oferta de memória: preço de mercado muda todo dia. Informar só o que a consulta ao sistema ou o encarte vigente mostrar."
+    },
+    {
+      "id": "supermercado.limite.pereciveis",
+      "categoria": "limite",
+      "texto": "Não garantir disponibilidade de perecíveis (carne, pão, hortifruti): dizer que depende do estoque do dia."
+    },
+    {
+      "id": "supermercado.limite.alcool",
+      "categoria": "limite",
+      "texto": "Não vender nem combinar entrega de bebida alcoólica para menor de 18 anos."
+    },
+    {
+      "id": "supermercado.transferir.pedido",
+      "categoria": "transferir",
+      "texto": "Pedido de entrega ou retirada é montado por uma pessoa da equipe: anotar a lista e passar adiante."
+    },
+    {
+      "id": "supermercado.transferir.qualidade",
+      "categoria": "transferir",
+      "texto": "Reclamação de produto vencido, estragado ou que fez mal vai na hora para a gerência."
+    }
+  ]
+}

@@ -27,6 +27,11 @@ export interface Canal {
   permite_http: boolean;
 }
 
+/** Canal como o worker o vê: inclui para que ele serve. */
+export interface CanalDoLote extends Canal {
+  finalidade: "atendimento" | "implantacao";
+}
+
 export interface Lote {
   conversa_id: string;
   tenant_id: string;
@@ -85,12 +90,20 @@ export function criarRepositorioAtendimento(url: string) {
       return linha?.segredo ?? null;
     },
 
-    async canalDoLote(tenantId: string, canalId: string): Promise<Canal | null> {
-      const [linha] = await sql<Canal[]>`
-        select id as canal_id, tenant_id, conta_externa, base_url, permite_http
+    async canalDoLote(tenantId: string, canalId: string): Promise<CanalDoLote | null> {
+      const [linha] = await sql<CanalDoLote[]>`
+        select id as canal_id, tenant_id, conta_externa, base_url, permite_http, finalidade
         from atendimento.canais
         where id = ${canalId} and tenant_id = ${tenantId} and ativo`;
       return linha ?? null;
+    },
+
+    /** Verdadeiro só para o telefone cadastrado para implantar este tenant. */
+    async podeImplantar(tenantId: string, contato: string | null): Promise<boolean> {
+      if (!contato) return false;
+      const [linha] = await sql<{ ok: boolean }[]>`
+        select atendimento.pode_implantar(${tenantId}, ${contato}) as ok`;
+      return linha.ok;
     },
 
     /** Falso quando a mensagem já tinha sido recebida. */
@@ -208,7 +221,15 @@ export function criarRepositorioAtendimento(url: string) {
                reserva_barato_usd, reserva_forte_usd, instrucoes
         from atendimento.config where tenant_id = ${tenantId}`;
       if (!linha) return null;
+      // Só orientações ativas, isto é, aprovadas por owner ou admin.
+      const orientacoes = await sql<
+        { categoria: "tom" | "limite" | "transferir"; texto: string }[]
+      >`
+        select categoria, texto from atendimento.orientacoes
+        where tenant_id = ${tenantId} and status = 'ativa'
+        order by categoria, criado_em limit 40`;
       return {
+        orientacoes: [...orientacoes],
         modo: linha.modo,
         modelo_barato: linha.modelo_barato,
         modelo_forte: linha.modelo_forte,

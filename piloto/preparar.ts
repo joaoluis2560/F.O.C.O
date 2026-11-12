@@ -29,7 +29,7 @@ const ler = async <T>(caminho: string): Promise<T> =>
   JSON.parse(await Deno.readTextFile(new URL(caminho, raiz)));
 
 const catalogo = await ler<Catalogo>("supabase/functions/_shared/catalogo/capacidades.json");
-const pacote = await ler<Pacote>("catalogo/pacotes/base.json");
+const pacote = await ler<Pacote>("supabase/functions/_shared/catalogo/pacotes/base.json");
 const respostas = await ler<Record<string, string>>("piloto/respostas-exemplo.json");
 const tokenErp = Deno.env.get("ERP_SIMULADO_TOKEN") ?? "erp-simulado-local";
 const baseErp = Deno.env.get("ERP_SIMULADO_URL") ?? "http://127.0.0.1:8787";
@@ -76,11 +76,21 @@ try {
 
     // Respostas do pacote viram fatos propostos; o dono ativa cada um com a
     // visibilidade sugerida, pelo mesmo caminho de revisão usado em produção.
-    const { fatos, pendentes } = fatosDoPacote(pacote, respostas);
+    const { fatos, orientacoes, pendentes } = fatosDoPacote(pacote, respostas);
     const ids = await tx`
       select cerebro.propor_fatos(${tenant.id}, ${tx.json(fatos as never)}, 'pacote') as id`;
     for (const { id } of ids) {
       await tx`select cerebro.revisar_fato(${tenant.id}, ${id}, ${dono.id}, 'ativar')`;
+    }
+
+    // Tom, limites e quando transferir: orientações do atendimento, também
+    // aprovadas pelo dono antes de valer.
+    for (const o of orientacoes) {
+      const [{ id }] = await tx`
+        select atendimento.propor_orientacao(
+          ${tenant.id}, ${o.categoria}::atendimento.categoria_orientacao, ${o.texto}, null,
+          'pacote') as id`;
+      await tx`select atendimento.revisar_orientacao(${tenant.id}, ${id}, ${dono.id}, 'ativar')`;
     }
 
     const bytes = crypto.getRandomValues(new Uint8Array(32));
@@ -112,7 +122,10 @@ try {
     );
 
     console.log(`Empresa de exemplo: Casa do Parafuso (${tenant.id})`);
-    console.log(`Fatos ativos: ${fatos.length}; perguntas sem resposta: ${pendentes.length}`);
+    console.log(
+      `Fatos ativos: ${fatos.length}; orientações ativas: ${orientacoes.length}; ` +
+        `perguntas sem resposta: ${pendentes.length}`,
+    );
     console.log(`Conectores aprovados: ${catalogo.capacidades.length}`);
     console.log("Credencial `hermes` (perfil equipe) gravada em piloto/hermes/.env");
     if (!chave || !modelo) {
