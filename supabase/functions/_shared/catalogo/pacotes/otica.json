@@ -1,0 +1,124 @@
+{
+  "versao": 1,
+  "nome": "otica",
+  "segmento": "otica",
+  "rotulo": "Ótica",
+  "estende": "base",
+  "descricao": "Perguntas e orientações de partida para óticas. Rascunho: precisa ser revisado com donos de ótica antes de virar padrão.",
+  "omitir": [],
+  "capacidades": ["produtos.consultar", "pedidos.status", "financeiro.titulos_em_aberto"],
+  "perguntas": [
+    {
+      "id": "otica.receita",
+      "dominio": "vendas",
+      "tipo": "regra",
+      "visibilidade": "publico",
+      "titulo": "Receita para fazer óculos",
+      "pergunta": "Para fazer óculos de grau, o cliente precisa de receita? De quanto tempo ela pode ser? Aceitam receita de qualquer profissional?",
+      "chaves": ["receita", "grau", "oftalmologista", "validade da receita"]
+    },
+    {
+      "id": "otica.exame",
+      "dominio": "operacao",
+      "tipo": "informacao",
+      "visibilidade": "publico",
+      "titulo": "Exame de vista",
+      "pergunta": "A loja faz exame de vista ou indica onde fazer? Se indica, onde e como agendar?",
+      "chaves": ["exame de vista", "exame", "consulta", "medir grau"]
+    },
+    {
+      "id": "otica.prazo",
+      "dominio": "operacao",
+      "tipo": "informacao",
+      "visibilidade": "publico",
+      "titulo": "Prazo para os óculos ficarem prontos",
+      "pergunta": "Em quanto tempo os óculos ficam prontos? Muda para lente multifocal, alto grau ou lente especial?",
+      "chaves": ["prazo", "fica pronto", "quando fica pronto", "multifocal"]
+    },
+    {
+      "id": "otica.lentes",
+      "dominio": "vendas",
+      "tipo": "informacao",
+      "visibilidade": "publico",
+      "titulo": "Tipos de lente e tratamentos",
+      "pergunta": "Com quais tipos de lente e tratamentos a loja trabalha (antirreflexo, filtro de luz azul, fotossensível, multifocal)? Quais marcas?",
+      "chaves": ["lente", "lentes", "antirreflexo", "luz azul", "transitions", "multifocal"]
+    },
+    {
+      "id": "otica.armacoes",
+      "dominio": "vendas",
+      "tipo": "informacao",
+      "visibilidade": "publico",
+      "titulo": "Armações e marcas",
+      "pergunta": "Quais marcas e faixas de preço de armação a loja tem? Vende óculos de sol? Faz lente em armação que o cliente já tem?",
+      "chaves": ["armacao", "armacoes", "marca", "oculos de sol", "solar"]
+    },
+    {
+      "id": "otica.contato",
+      "dominio": "vendas",
+      "tipo": "informacao",
+      "visibilidade": "publico",
+      "titulo": "Lentes de contato",
+      "pergunta": "A loja vende lentes de contato? Quais tipos? Precisa de receita específica? Faz teste de adaptação?",
+      "chaves": ["lente de contato", "lentes de contato"]
+    },
+    {
+      "id": "otica.garantia",
+      "dominio": "vendas",
+      "tipo": "regra",
+      "visibilidade": "publico",
+      "titulo": "Garantia e adaptação",
+      "pergunta": "Qual a garantia de armação e de lente? Se o cliente não se adaptar à lente (multifocal, por exemplo), o que a loja faz e em que prazo?",
+      "chaves": ["garantia", "adaptacao", "nao me adaptei", "arranhou", "quebrou"]
+    },
+    {
+      "id": "otica.ajuste",
+      "dominio": "operacao",
+      "tipo": "informacao",
+      "visibilidade": "publico",
+      "titulo": "Ajustes e consertos",
+      "pergunta": "A loja faz ajuste, troca de plaqueta e parafuso ou conserto de armação? É cobrado? Atende óculos comprados em outro lugar?",
+      "chaves": ["ajuste", "conserto", "plaqueta", "parafuso", "apertar"]
+    },
+    {
+      "id": "otica.orcamento",
+      "dominio": "vendas",
+      "tipo": "procedimento",
+      "visibilidade": "publico",
+      "titulo": "Como pedir orçamento",
+      "pergunta": "O que o cliente precisa enviar para receber um orçamento (foto da receita, armação escolhida)? Quem responde e em quanto tempo?",
+      "chaves": ["orcamento", "quanto fica", "preco do oculos"]
+    },
+    {
+      "id": "otica.convenios",
+      "dominio": "vendas",
+      "tipo": "informacao",
+      "visibilidade": "publico",
+      "titulo": "Convênios e parcerias",
+      "pergunta": "A loja tem convênio ou desconto para empresas, sindicatos, planos ou clínicas parceiras? Como o cliente usa?",
+      "chaves": ["convenio", "parceria", "desconto empresa"]
+    }
+  ],
+  "orientacoes_padrao": [
+    {
+      "id": "otica.limite.saude",
+      "categoria": "limite",
+      "texto": "Não interpretar receita, não sugerir grau e não dar orientação sobre saúde dos olhos. Para qualquer dúvida desse tipo, dizer que é assunto para o oftalmologista ou para o atendente da loja."
+    },
+    {
+      "id": "otica.limite.preco",
+      "categoria": "limite",
+      "texto": "Não informar preço final de óculos de grau sem orçamento: o valor depende da receita e da lente escolhida."
+    },
+    {
+      "id": "otica.transferir.receita",
+      "categoria": "transferir",
+      "texto": "Quando o cliente enviar foto de receita ou pedir orçamento de óculos de grau, passar para uma pessoa da equipe."
+    },
+    {
+      "id": "otica.transferir.adaptacao",
+      "categoria": "transferir",
+      "texto": "Queixa de desconforto, dor de cabeça ou dificuldade de adaptação com óculos ou lentes vai para uma pessoa da equipe."
+    }
+  ]
+}

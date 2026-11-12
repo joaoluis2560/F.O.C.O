@@ -16,7 +16,7 @@ Arquitetura, decisões e fases: [docs/plano.md](docs/plano.md).
 - **Fase 2 (segundo cérebro):** schema `cerebro` (fatos, chaves, materiais,
   revisões), busca em português com filtro de visibilidade, revisão humana
   obrigatória antes de um fato chegar ao cliente, pacote de domínio inicial
-  (`catalogo/pacotes/base.json`) e ingestão de material com Claude.
+  (`supabase/functions/_shared/catalogo/pacotes/`) e ingestão de material com Claude.
 
 - **Fase 3A (servidor MCP):** Edge Function `mcp` que expõe o cérebro e os
   conectores de leitura a agentes externos, com token por tenant e dois perfis
@@ -25,6 +25,8 @@ Arquitetura, decisões e fases: [docs/plano.md](docs/plano.md).
 - **Piloto interno com Hermes:** kit em [piloto/](piloto/README.md) com empresa de
   exemplo, servidor MCP no host e configuração travada do Hermes.
 
+- **Propostas e orientações:** agentes propõem fatos e orientações de atendimento (tom,
+  limites, quando transferir); só valem depois de aprovados por owner ou admin.
 - **Agente de atendimento (cliente final):** entrada do Chatwoot, fila em lote,
   roteador em três níveis (regra sem modelo, modelo barato, modelo forte), modo
   sombra, tetos de gasto e registro de custo por mensagem.
@@ -79,7 +81,80 @@ sabe de qual telefone a mensagem veio (`nucleo.abrir_sessao_atendimento`). O
 agente recebe só um token opaco de vida curta. O token de atendimento sozinho
 não dá acesso a dados de cliente, e telefone informado por quem chama é recusado.
 
-Capacidades de escrita não são expostas: dependem do fluxo de aprovação humana.
+Capacidades de escrita no sistema da empresa não são expostas: dependem do fluxo de aprovação
+humana.
+
+### Propostas e revisão
+
+Agentes propõem, o dono decide. No perfil `equipe` o MCP oferece:
+
+- `cerebro_propor_fato`: algo novo que a equipe ensinou sobre a empresa.
+- `atendimento_propor_orientacao`: como o atendimento deve se comportar com clientes, em três
+  categorias: `tom`, `limite` e `transferir`.
+- `propostas_pendentes`: o que está aguardando decisão.
+
+Tudo nasce como proposta. Só owner ou admin da empresa ativa, pelas funções
+`cerebro.minha_revisao_de_fato` e `atendimento.minha_revisao_de_orientacao`, que usam a
+identidade de quem está autenticado. Orientação ativa entra no prompt do agente de atendimento;
+fato ativo e público passa a ser encontrado por ele. A fila tem limite de 200 itens por empresa.
+
+Ainda não há tela de revisão: a aprovação hoje é feita chamando essas funções.
+
+### Implantação por segmento
+
+O segmento da empresa (`nucleo.tenants.segmento`) escolhe o roteiro de implantação: o pacote
+base, com as perguntas que toda PME responde, mais a camada do nicho, com perguntas próprias,
+orientações de partida e as capacidades que fazem sentido. Hoje há camada para `otica` e
+`supermercado`; segmento sem camada usa só a base. Os pacotes ficam em
+`supabase/functions/_shared/catalogo/pacotes/` e os dois de nicho são rascunhos a validar com
+donos reais.
+
+O agente da equipe conduz a entrevista pelo MCP:
+
+- `implantacao_pendencias`: próximas perguntas do roteiro e orientações sugeridas para o segmento.
+- `cerebro_propor_fato` / `atendimento_propor_orientacao` com `pergunta_id`: registra a resposta
+  ligada à pergunta. Não há estado de entrevista à parte: pergunta com resposta registrada sai
+  da lista.
+- `implantacao_nao_se_aplica`: tira da lista o que não existe naquela empresa.
+
+```bash
+deno task piloto:implantar otica "Ótica Boa Vista"   # empresa nova, vazia, do segmento
+deno task piloto:aprovar otica                        # aprova o pendente, no papel da dona
+FOCO_EMPRESA=otica-piloto deno task simular "pergunta de cliente"
+```
+
+A entrada prevista é uma página que coleta nome, telefone e segmento; ela ainda não existe.
+
+#### Agente de implantação compartilhado
+
+A entrevista também pode ser conduzida pelo agente próprio, sem um Hermes por empresa: é a
+mesma fila e o mesmo worker do atendimento, em um canal com `finalidade = 'implantacao'`.
+
+- Só o telefone gravado em `atendimento.implantadores` para aquele tenant é atendido. A
+  conferência usa o telefone que veio do canal; qualquer outro contato fica sem resposta e sem
+  chamada de modelo (`contato_nao_autorizado`).
+- O agente usa o perfil `implantacao`: só as ferramentas de proposta e de roteiro. Não busca no
+  cérebro nem consulta o sistema da empresa. Esse perfil não existe como credencial do MCP.
+- A resposta sempre vai para o dono, mesmo com a empresa em modo sombra. O limite de mensagens
+  por contato não se aplica; o teto diário de gasto continua valendo.
+- Nada do que ele registra vale antes da aprovação do dono na fila de revisão.
+
+```bash
+deno task piloto:implantar otica "Ótica Boa Vista"
+FOCO_EMPRESA=otica-piloto deno task simular:implantacao            # roteiro padrão
+FOCO_EMPRESA=otica-piloto deno task simular:implantacao "mensagem" # uma por argumento
+FOCO_EMPRESA=otica-piloto deno task simular:implantacao intruso    # outro telefone
+```
+
+Verificado em 11/11/2026 com modelo real, repetindo as mensagens usadas com o Hermes: três
+fatos, cinco orientações e duas perguntas marcadas como não aplicáveis, as quatro mensagens no
+modelo barato, US$ 0,0034 no total. Depois da aprovação, o atendimento respondeu certo às
+mesmas quatro perguntas de cliente.
+
+Ainda não existe: o canal único da plataforma que recebe o dono e descobre a empresa pelo
+telefone. Hoje o canal de implantação é cadastrado por tenant, o que serve para simulação mas
+não para um número de WhatsApp compartilhado. A comparação de telefone é exata; números
+brasileiros que o WhatsApp entrega sem o nono dígito precisarão de tratamento.
 
 ```bash
 deno task credencial --tenant <uuid> --nome hermes --perfil equipe   # gera token e SQL do hash
@@ -162,7 +237,6 @@ O adaptador do Chatwoot segue a documentação pública e não rodou contra uma 
 ## Estrutura
 
 ```
-catalogo/pacotes/              pacotes de domínio (perguntas de implantação)
 supabase/migrations/           schema versionado
 supabase/tests/                testes pgTAP
 supabase/seed.sql              auxiliares de teste (local e CI)

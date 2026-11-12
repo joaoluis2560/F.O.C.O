@@ -1,5 +1,5 @@
 {
-  "versao": 2,
+  "versao": 3,
   "nome": "base",
   "descricao": "Perguntas que toda pequena ou média empresa precisa responder antes de colocar o atendimento no ar. Cada resposta vira um fato proposto no cérebro.",
   "perguntas": [
@@ -10,7 +10,19 @@
       "visibilidade": "publico",
       "titulo": "Horário de atendimento",
       "pergunta": "Em quais dias e horários a empresa atende? Há diferença em feriados?",
-      "chaves": ["horario", "funcionamento", "aberto", "feriado", "horas", "abre", "abrem", "fecha", "fecham", "sabado", "domingo"]
+      "chaves": [
+        "horario",
+        "funcionamento",
+        "aberto",
+        "feriado",
+        "horas",
+        "abre",
+        "abrem",
+        "fecha",
+        "fecham",
+        "sabado",
+        "domingo"
+      ]
     },
     {
       "id": "operacao.endereco",
@@ -46,7 +58,18 @@
       "visibilidade": "publico",
       "titulo": "Formas de pagamento",
       "pergunta": "Quais formas de pagamento são aceitas? Parcela em quantas vezes? Há desconto à vista?",
-      "chaves": ["pagamento", "pix", "cartao", "boleto", "parcelamento", "parcela", "parcelam", "parcelar", "credito", "debito"]
+      "chaves": [
+        "pagamento",
+        "pix",
+        "cartao",
+        "boleto",
+        "parcelamento",
+        "parcela",
+        "parcelam",
+        "parcelar",
+        "credito",
+        "debito"
+      ]
     },
     {
       "id": "vendas.troca",
@@ -109,7 +132,8 @@
       "visibilidade": "interno",
       "titulo": "Reclamações e casos sensíveis",
       "pergunta": "Quais assuntos devem ir direto para uma pessoa (reclamação, cancelamento, problema grave)? Quem assume?",
-      "chaves": ["reclamacao", "cancelamento", "transferir", "reclamar", "cancelar"]
+      "chaves": ["reclamacao", "cancelamento", "transferir", "reclamar", "cancelar"],
+      "orientacao": "transferir"
     },
     {
       "id": "marketing.promocoes",
@@ -127,7 +151,8 @@
       "visibilidade": "interno",
       "titulo": "Tom de voz do atendimento",
       "pergunta": "Como a empresa fala com o cliente? Formal ou informal, usa emoji, como se apresenta?",
-      "chaves": ["tom de voz", "apresentacao"]
+      "chaves": ["tom de voz", "apresentacao"],
+      "orientacao": "tom"
     },
     {
       "id": "geral.limites",
@@ -136,7 +161,8 @@
       "visibilidade": "interno",
       "titulo": "O que o atendimento automático não deve fazer",
       "pergunta": "Há assuntos que o atendimento automático não pode tratar ou promessas que não pode fazer?",
-      "chaves": ["limites", "proibido"]
+      "chaves": ["limites", "proibido"],
+      "orientacao": "limite"
     }
   ]
 }

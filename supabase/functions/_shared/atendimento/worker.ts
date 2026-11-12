@@ -1,6 +1,11 @@
 // Worker do atendimento: pega um lote da fila, decide (regra, modelo barato ou
 // modelo forte), entrega no canal e registra o custo.
 //
+// O mesmo worker conduz a entrevista de implantação. O que muda é a finalidade
+// do canal: no de implantação só o telefone do cadastro é atendido, o agente
+// usa o perfil que registra propostas, e a resposta sempre vai para quem
+// escreveu (não existe modo sombra para falar com o dono).
+//
 // Garantias:
 //   * Só o worker que reivindicou o lote o renova, entrega e conclui. Antes de
 //     cada chamada de modelo e de cada etapa de entrega o prazo é renovado; se
@@ -19,6 +24,7 @@ import { dividir, resumir } from "./contexto.ts";
 import { type ClienteModelo, type Uso, USO_ZERO } from "./modelo.ts";
 import {
   type Canal,
+  type CanalDoLote,
   type Entrega,
   execucaoDePasso,
   type Lote,
@@ -53,6 +59,8 @@ export interface ResultadoLote {
  * precedida de renovação, então o prazo só vence se o worker morrer.
  */
 const LEASE_SEG = 180;
+
+const SO_TEXTO = "Por enquanto só consigo ler texto. Pode escrever sua resposta?";
 
 const regra = (motivo: string, resultado: string): RegistroExecucao => ({
   nivel: 0,
@@ -141,6 +149,26 @@ async function prepararContexto(
     const motivo = erro instanceof Error ? erro.message.slice(0, 120) : "erro";
     await registrar("falhou", USO_ZERO, `resumo_de_contexto: ${motivo}`);
     return { resumo, historico: recentes };
+  }
+}
+
+/**
+ * Telefone de quem escreveu. Vem do canal, nunca do modelo: se o webhook não o
+ * trouxe, é lido direto do canal com a nossa credencial.
+ */
+async function contatoDoLote(
+  d: DependenciasWorker,
+  lote: Lote,
+  cadastro: CanalDoLote,
+  token: string,
+): Promise<string | null> {
+  if (lote.contato) return lote.contato;
+  try {
+    const contato = await d.canal(cadastro, token).telefoneDaConversa(lote.conversa_externa);
+    if (contato) await d.repo.salvarContato(lote.tenant_id, lote.conversa_id, contato);
+    return contato;
+  } catch {
+    return null;
   }
 }
 
@@ -236,7 +264,10 @@ export async function processarProximoLote(d: DependenciasWorker): Promise<Resul
       sombra: true,
     };
   }
-  const sombra = config.modo === "sombra";
+  const cadastro = await d.repo.canalDoLote(tenant_id, lote.canal_id);
+  const implantacao = cadastro?.finalidade === "implantacao";
+  // Na implantação quem escreve é o dono, e ele precisa receber a resposta.
+  const sombra = config.modo === "sombra" && !implantacao;
   const base = { conversa_id, sombra };
 
   try {
@@ -246,13 +277,38 @@ export async function processarProximoLote(d: DependenciasWorker): Promise<Resul
     let custo = 0;
 
     if (!entrega) {
+      // Canal de implantação: antes de qualquer regra ou modelo, confere se quem
+      // escreve é o telefone do cadastro. Qualquer outro fica sem resposta.
+      let contato = lote.contato;
+      if (implantacao) {
+        const token = await d.repo.lerSegredoCanal(tenant_id, lote.canal_id);
+        if (!token) throw new Error("canal inativo ou sem segredo");
+        contato = await contatoDoLote(d, lote, cadastro, token);
+        if (!await d.repo.podeImplantar(tenant_id, contato)) {
+          await d.repo.registrarExecucao(
+            tenant_id,
+            conversa_id,
+            sombra,
+            regra("contato_nao_autorizado", "ignorou"),
+          );
+          await d.repo.concluirLote(lote.mensagem_ids, lote.reivindicacao, "ignorada");
+          return {
+            ...base,
+            acao: "ignorar",
+            motivo: "contato_nao_autorizado",
+            nivel: 0,
+            custo_usd: 0,
+          };
+        }
+      }
+
       const uso = await d.repo.usoAtual(tenant_id, conversa_id);
-      const semModelo = decidirSemModelo({
-        texto: lote.texto,
-        anexos: lote.anexos,
-        humano: lote.humano,
-        ...uso,
-      }, config);
+      const semModelo = decidirSemModelo(
+        { texto: lote.texto, anexos: lote.anexos, humano: lote.humano, ...uso },
+        // O dono responde muitas mensagens seguidas durante a entrevista: o limite
+        // por contato não se aplica a ele. O teto diário continua valendo.
+        implantacao ? { ...config, limite_contato_hora: Infinity } : config,
+      );
 
       if (semModelo?.acao === "ignorar") {
         await d.repo.registrarExecucao(
@@ -266,7 +322,16 @@ export async function processarProximoLote(d: DependenciasWorker): Promise<Resul
       }
 
       let plano: { acao: "responder" | "transferir"; texto: string; motivo: string };
-      if (semModelo) {
+      if (semModelo && implantacao && semModelo.motivo === "midia_nao_suportada") {
+        // O dono mandou áudio ou imagem: pedir texto resolve, não precisa de uma pessoa.
+        plano = { acao: "responder", texto: SO_TEXTO, motivo: semModelo.motivo };
+        await d.repo.registrarExecucao(
+          tenant_id,
+          conversa_id,
+          sombra,
+          regra(semModelo.motivo, "respondeu"),
+        );
+      } else if (semModelo) {
         plano = { acao: "transferir", texto: semModelo.texto, motivo: semModelo.motivo };
         await d.repo.registrarExecucao(
           tenant_id,
@@ -275,27 +340,17 @@ export async function processarProximoLote(d: DependenciasWorker): Promise<Resul
           regra(semModelo.motivo, "transferiu"),
         );
       } else {
-        const cadastro = await d.repo.canalDoLote(tenant_id, lote.canal_id);
         const token = cadastro && await d.repo.lerSegredoCanal(tenant_id, lote.canal_id);
         if (!cadastro || !token) throw new Error("canal inativo ou sem segredo");
-
-        // Identidade do cliente: o telefone vem do canal, nunca do modelo. Se o
-        // webhook não o trouxe, é lido direto do canal com a nossa credencial.
-        let contato = lote.contato;
-        if (!contato) {
-          try {
-            contato = await d.canal(cadastro, token).telefoneDaConversa(lote.conversa_externa);
-            if (contato) await d.repo.salvarContato(tenant_id, conversa_id, contato);
-          } catch {
-            contato = null;
-          }
-        }
+        if (!implantacao) contato = await contatoDoLote(d, lote, cadastro, token);
 
         const modelo = modeloControlado(d, lote, config);
-        const cred: Credencial = { credencial_id: "agente", tenant_id, perfil: "atendimento" };
+        const papel = implantacao ? "implantacao" : "atendimento";
+        const cred: Credencial = { credencial_id: "agente", tenant_id, perfil: papel };
         const nucleo = { repo: d.nucleo, catalogo: d.catalogo };
         const contexto = await prepararContexto(d, modelo, lote, config, sombra);
         const desfecho = await atender({
+          papel,
           modelo,
           config,
           ferramentas: await ferramentasDe(nucleo, cred),
@@ -320,7 +375,6 @@ export async function processarProximoLote(d: DependenciasWorker): Promise<Resul
       });
     }
 
-    const cadastro = await d.repo.canalDoLote(tenant_id, lote.canal_id);
     const token = cadastro && await d.repo.lerSegredoCanal(tenant_id, lote.canal_id);
     if (!cadastro || !token) throw new Error("canal inativo ou sem segredo");
     await entregar(d, d.canal(cadastro, token), lote, entrega);

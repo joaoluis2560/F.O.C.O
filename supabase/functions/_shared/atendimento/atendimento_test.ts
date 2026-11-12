@@ -117,9 +117,15 @@ const chama = (nome: string, args: unknown, id = "c1"): RespostaModelo => ({
 
 /** Modelo falso: cada modelo tem uma fila de respostas. Registra o que recebeu. */
 function roteiro(filas: Record<string, (RespostaModelo | Error)[]>) {
-  const pedidos: { modelo: string; mensagens: MensagemModelo[]; ferramentas: string[] }[] = [];
-  const modelo: ClienteModelo = ({ modelo, mensagens, ferramentas }) => {
+  const pedidos: {
+    modelo: string;
+    mensagens: MensagemModelo[];
+    ferramentas: string[];
+    max_tokens?: number;
+  }[] = [];
+  const modelo: ClienteModelo = ({ modelo, mensagens, ferramentas, max_tokens }) => {
     pedidos.push({
+      max_tokens,
       modelo,
       mensagens: structuredClone(mensagens),
       ferramentas: ferramentas.map((f) => f.name),
@@ -385,4 +391,97 @@ Deno.test("webhook: o que é recusado", async () => {
   for (const [nome, t, a, c] of casos) {
     assert(await verificarAssinatura("segredo", t, a, c, agora) !== null, nome);
   }
+});
+
+Deno.test("agente: orientações aprovadas entram no prompt, agrupadas por tipo", async () => {
+  const { modelo, pedidos } = roteiro({ "teste/barato": [fala("Ok.")] });
+  await atender({
+    ...pedido(modelo),
+    config: {
+      ...config,
+      orientacoes: [
+        { categoria: "transferir", texto: "Reclamação vai para a gerência." },
+        { categoria: "tom", texto: "Tratar por você." },
+        { categoria: "tom", texto: "Sem emoji." },
+      ],
+    },
+  });
+  const sistema = pedidos[0].mensagens[0].content;
+  assert(sistema.includes("Jeito de falar:\n- Tratar por você.\n- Sem emoji."));
+  assert(
+    sistema.includes("Quando chamar uma pessoa da equipe:\n- Reclamação vai para a gerência."),
+  );
+  assert(!sistema.includes("O que não fazer nem prometer"));
+});
+
+// Papel de implantação ------------------------------------------------------------
+
+Deno.test("implantação: instruções de entrevista, sem as orientações de atendimento", async () => {
+  const { modelo, pedidos } = roteiro({ "teste/barato": [fala("Vamos começar.")] });
+  const r = await atender({
+    ...pedido(modelo),
+    papel: "implantacao",
+    config: {
+      ...config,
+      instrucoes: "Trate por você.",
+      orientacoes: [{ categoria: "tom", texto: "Sem emoji." }],
+    },
+  });
+  assertEquals([r.acao, r.texto], ["responder", "Vamos começar."]);
+  const sistema = pedidos[0].mensagens[0].content;
+  assert(sistema.includes("implantacao_pendencias"));
+  assert(sistema.includes("dono ou responsável"));
+  // O que orienta a conversa com clientes não entra na conversa com o dono.
+  assert(!sistema.includes("Sem emoji."));
+  assert(!sistema.includes("Trate por você."));
+  assert(!sistema.includes("cerebro_buscar"));
+  assertEquals(pedidos[0].ferramentas, ["cerebro_buscar", "transferir_para_humano", "escalar"]);
+  // Limite de saída maior que o do atendimento, que usa o padrão do cliente.
+  assertEquals(pedidos[0].max_tokens, 3000);
+  const comum = roteiro({ "teste/barato": [fala("Ok.")] });
+  await atender(pedido(comum.modelo));
+  assertEquals(comum.pedidos[0].max_tokens, undefined);
+});
+
+Deno.test("implantação: mais rodadas que o atendimento, e ainda assim com limite", async () => {
+  const laco = roteiro({
+    "teste/barato": Array.from({ length: 20 }, (_, i) => chama("x", {}, `c${i}`)),
+    "teste/forte": [fala("Pode repetir?")],
+  });
+  const r = await atender({ ...pedido(laco.modelo), papel: "implantacao" });
+  assertEquals(laco.pedidos.filter((p) => p.modelo === "teste/barato").length, 10);
+  assertEquals(r.passos.map((p) => p.resultado), ["falhou", "respondeu"]);
+});
+
+Deno.test("implantação: pedido de ajuda do dono transfere para uma pessoa", async () => {
+  const { modelo } = roteiro({
+    "teste/barato": [chama("transferir_para_humano", { motivo: "quer falar de preço" })],
+  });
+  const r = await atender({ ...pedido(modelo), papel: "implantacao" });
+  assertEquals([r.acao, r.motivo], ["transferir", "quer falar de preço"]);
+});
+
+Deno.test("agente: saída cortada no limite não vai para ninguém e sobe de nível", async () => {
+  const { modelo, pedidos } = roteiro({
+    "teste/barato": [{ ...fala("Os óculos ficam prontos em"), cortada: true }],
+    "teste/forte": [fala("Ficam prontos em 5 dias úteis.")],
+  });
+  const r = await atender(pedido(modelo));
+  assertEquals(r.texto, "Ficam prontos em 5 dias úteis.");
+  assertEquals(r.passos.map((p) => p.resultado), ["falhou", "respondeu"]);
+  assertEquals(r.passos[1].motivo, "falhou: saida_cortada");
+  assertEquals(pedidos.length, 2);
+});
+
+Deno.test("agente: ferramenta pedida em saída cortada não é executada", async () => {
+  const { modelo } = roteiro({
+    "teste/barato": [{ ...chama("cerebro_buscar", { pergunta: "hor" }), cortada: true }],
+    "teste/forte": [fala("Abrimos às 8h.")],
+  });
+  let executou = false;
+  await atender(pedido(modelo, () => {
+    executou = true;
+    return Promise.resolve(ok("{}"));
+  }));
+  assertEquals(executou, false);
 });

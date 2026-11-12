@@ -5,13 +5,25 @@
 // A versão nativa de Deno do driver não traz tipos; eles vêm do pacote npm.
 // @ts-types="npm:postgres@3.4.5"
 import postgres from "postgres";
-import type {
-  ConectorAtivo,
-  Credencial,
-  FatoEncontrado,
-  Perfil,
-  Repositorio,
+import {
+  type ConectorAtivo,
+  type Credencial,
+  type FatoEncontrado,
+  FilaDeRevisaoCheia,
+  type Perfil,
+  type PropostaPendente,
+  type Repositorio,
 } from "./repositorio.ts";
+
+/** Converte o erro "fila cheia" do banco (SQLSTATE 54000) no erro do domínio. */
+async function comFila<T>(operacao: () => Promise<T>): Promise<T> {
+  try {
+    return await operacao();
+  } catch (erro) {
+    if ((erro as { code?: string })?.code === "54000") throw new FilaDeRevisaoCheia();
+    throw erro;
+  }
+}
 
 export function criarRepositorioPg(url: string): Repositorio & { fechar(): Promise<void> } {
   // prepare:false mantém compatibilidade com o pooler em modo transação.
@@ -67,6 +79,41 @@ export function criarRepositorioPg(url: string): Repositorio & { fechar(): Promi
           (tenant_id, conector_id, capacidade, ok, status_http, duracao_ms, erro)
         values (${tenantId}, ${conectorId}, ${capacidade}, ${r.ok}, ${r.status_http ?? null},
                 ${r.duracao_ms}, ${r.ok ? null : `${r.erro.codigo}: ${r.erro.mensagem}`})`;
+    },
+
+    async proporFato(tenantId, fato) {
+      await comFila(() =>
+        sql`select cerebro.propor_fato_de_agente(${tenantId}, ${sql.json(fato as never)})`
+      );
+    },
+
+    async proporOrientacao(tenantId, categoria, texto, justificativa, fonte) {
+      await comFila(() =>
+        sql`select atendimento.propor_orientacao(
+              ${tenantId}, ${categoria}::atendimento.categoria_orientacao, ${texto},
+              ${justificativa}, 'agente', ${fonte ?? null})`
+      );
+    },
+
+    async ignorarPergunta(tenantId, perguntaId) {
+      await sql`select atendimento.ignorar_pergunta(${tenantId}, ${perguntaId})`;
+    },
+
+    async implantacao(tenantId) {
+      const [tenant] = await sql<{ segmento: string | null }[]>`
+        select segmento from nucleo.tenants where id = ${tenantId}`;
+      const linhas = await sql<{ fonte: string }[]>`
+        select fonte from atendimento.implantacao_respondidas(${tenantId}) as fonte`;
+      return { segmento: tenant?.segmento ?? null, respondidas: linhas.map((l) => l.fonte) };
+    },
+
+    async propostasPendentes(tenantId) {
+      const [{ total }] = await sql<{ total: number }[]>`
+        select atendimento.total_pendente(${tenantId}) as total`;
+      const itens = await sql<PropostaPendente[]>`
+        select tipo, categoria, titulo, texto, origem
+        from atendimento.propostas_pendentes(${tenantId}, 20)`;
+      return { total, itens: [...itens] };
     },
 
     async buscarFatos(tenantId, perfil: Perfil, pergunta, dominio) {

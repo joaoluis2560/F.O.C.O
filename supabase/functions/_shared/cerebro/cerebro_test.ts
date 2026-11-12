@@ -1,10 +1,17 @@
 import { assertEquals, assertRejects, assertThrows } from "@std/assert";
 import { type FatoExtraido, LIMITE_MATERIAL, proporDeMaterial } from "./ingestao.ts";
-import { fatosDoPacote, type Pacote } from "./pacote.ts";
+import { pacoteDoSegmento, SEGMENTOS } from "../catalogo/pacotes.ts";
+import {
+  fatosDoPacote,
+  fonteDaPergunta,
+  montarPacote,
+  type Pacote,
+  perguntaDaFonte,
+} from "./pacote.ts";
 import { DOMINIOS, TIPOS_FATO, VISIBILIDADES } from "./tipos.ts";
 
 const pacote: Pacote = JSON.parse(
-  await Deno.readTextFile(new URL("../../../../catalogo/pacotes/base.json", import.meta.url)),
+  await Deno.readTextFile(new URL("../catalogo/pacotes/base.json", import.meta.url)),
 );
 
 Deno.test("pacote base é bem formado", () => {
@@ -26,8 +33,23 @@ Deno.test("respostas viram fatos propostos; em branco fica pendente", () => {
     "operacao.horario": "  Segunda a sexta, 8h às 18h.  ",
     "vendas.desconto": "Até 5% sem consultar.",
     "vendas.troca": "   ",
+    "marketing.tom": "Tratar por você, sem emoji.",
+    "clientes.reclamacao": "Reclamação vai direto para a gerência.",
   });
   assertEquals(r.fatos.length, 2);
+  // Tom e regra de transferência não viram fato: viram orientação do atendimento.
+  assertEquals(r.orientacoes, [
+    {
+      categoria: "transferir",
+      texto: "Reclamação vai direto para a gerência.",
+      fonte: "pacote:base@3#clientes.reclamacao",
+    },
+    {
+      categoria: "tom",
+      texto: "Tratar por você, sem emoji.",
+      fonte: "pacote:base@3#marketing.tom",
+    },
+  ]);
   assertEquals(r.fatos[0], {
     dominio: "operacao",
     tipo: "informacao",
@@ -35,11 +57,11 @@ Deno.test("respostas viram fatos propostos; em branco fica pendente", () => {
     texto: "Segunda a sexta, 8h às 18h.",
     visibilidade: "publico",
     chaves: pacote.perguntas.find((p) => p.id === "operacao.horario")!.chaves,
-    fonte: "pacote:base@2#operacao.horario",
+    fonte: "pacote:base@3#operacao.horario",
   });
   assertEquals(r.fatos[1].visibilidade, "interno");
   assertEquals(r.pendentes.includes("vendas.troca"), true);
-  assertEquals(r.pendentes.length, pacote.perguntas.length - 2);
+  assertEquals(r.pendentes.length, pacote.perguntas.length - 4);
 });
 
 Deno.test("resposta para pergunta inexistente ou longa demais é erro", () => {
@@ -111,4 +133,87 @@ Deno.test("material vazio ou grande demais é recusado sem chamar o extrator", a
     "divida em partes",
   );
   assertEquals(chamadas, 0);
+});
+
+// Pacotes de nicho -------------------------------------------------------------
+
+const capacidades: string[] = JSON.parse(
+  await Deno.readTextFile(new URL("../catalogo/capacidades.json", import.meta.url)),
+).capacidades.map((c: { nome: string }) => c.nome);
+
+Deno.test("segmentos com pacote próprio: ótica e supermercado", () => {
+  assertEquals(SEGMENTOS.map((s) => s.segmento).sort(), ["otica", "supermercado"]);
+});
+
+for (const { segmento } of SEGMENTOS) {
+  Deno.test(`pacote de ${segmento} é bem formado e estende a base`, () => {
+    const p = pacoteDoSegmento(segmento);
+    const ids = p.perguntas.map((q) => q.id);
+    assertEquals(new Set(ids).size, ids.length, "ids de pergunta únicos");
+    assertEquals(p.segmento, segmento);
+    // As perguntas do nicho vêm antes das da base.
+    assertEquals(ids[0].startsWith(`${segmento}.`), true);
+    assertEquals(ids.some((id) => id === "operacao.horario"), true, "mantém perguntas da base");
+    for (const q of p.perguntas) {
+      assertEquals((DOMINIOS as readonly string[]).includes(q.dominio), true, q.id);
+      assertEquals((TIPOS_FATO as readonly string[]).includes(q.tipo), true, q.id);
+      assertEquals(q.chaves.every((c) => /^[a-z0-9]+( [a-z0-9]+)*$/.test(c)), true, q.id);
+      assertEquals(q.pergunta.trim().endsWith("?"), true, q.id);
+    }
+    const sugeridas = p.orientacoes_padrao ?? [];
+    assertEquals(sugeridas.length > 0, true);
+    for (const o of sugeridas) {
+      assertEquals(["tom", "limite", "transferir"].includes(o.categoria), true, o.id);
+      assertEquals(o.texto.length >= 3 && o.texto.length <= 600, true, o.id);
+      assertEquals(ids.includes(o.id), false, "id de orientação não colide com pergunta");
+    }
+    assertEquals(new Set(sugeridas.map((o) => o.id)).size, sugeridas.length);
+    for (const c of p.capacidades ?? []) assertEquals(capacidades.includes(c), true, c);
+  });
+}
+
+Deno.test("segmento desconhecido ou ausente usa o pacote base", () => {
+  assertEquals(pacoteDoSegmento("petshop").nome, "base");
+  assertEquals(pacoteDoSegmento(null).perguntas.length, pacote.perguntas.length);
+});
+
+Deno.test("supermercado omite a pergunta de orçamento da base", () => {
+  const ids = pacoteDoSegmento("supermercado").perguntas.map((q) => q.id);
+  assertEquals(ids.includes("vendas.orcamento"), false);
+  assertEquals(pacoteDoSegmento("otica").perguntas.some((q) => q.id === "vendas.orcamento"), true);
+});
+
+Deno.test("montarPacote recusa nicho inconsistente com a base", () => {
+  const nicho = {
+    versao: 1,
+    nome: "x",
+    segmento: "x",
+    rotulo: "X",
+    estende: "base",
+    descricao: "",
+    omitir: [] as string[],
+    capacidades: [] as string[],
+    perguntas: [] as Pacote["perguntas"],
+    orientacoes_padrao: [],
+  };
+  assertThrows(() => montarPacote(pacote, { ...nicho, estende: "outra" }), Error, "estende");
+  assertThrows(
+    () => montarPacote(pacote, { ...nicho, omitir: ["nao.existe"] }),
+    Error,
+    "inexistentes",
+  );
+  assertThrows(
+    () => montarPacote(pacote, { ...nicho, perguntas: [pacote.perguntas[0]] }),
+    Error,
+    "repete",
+  );
+});
+
+Deno.test("marca de origem de pergunta vai e volta", () => {
+  const p = pacoteDoSegmento("otica");
+  const fonte = fonteDaPergunta(p, "otica.prazo");
+  assertEquals(fonte, `pacote:otica@${p.versao}#otica.prazo`);
+  assertEquals(perguntaDaFonte(fonte), "otica.prazo");
+  assertEquals(perguntaDaFonte("material:Manual"), null);
+  assertEquals(perguntaDaFonte(null), null);
 });

@@ -10,6 +10,8 @@ export interface ConfigAtendimento {
   reserva_barato_usd: number;
   reserva_forte_usd: number;
   instrucoes: string | null;
+  /** Orientações aprovadas pelo dono: tom, limites e quando transferir. */
+  orientacoes?: { categoria: "tom" | "limite" | "transferir"; texto: string }[];
 }
 
 export interface Situacao {
