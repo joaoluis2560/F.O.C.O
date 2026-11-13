@@ -12,6 +12,7 @@
     "piloto:verificar": "deno run --allow-net=127.0.0.1 --allow-read=piloto/hermes piloto/verificar.ts",
     "simular": "FOCO_DB_URL=postgresql://postgres:postgres@127.0.0.1:56322/postgres deno run --env-file=piloto/hermes/.env --allow-net --allow-env --allow-read=. ferramentas/simular_atendimento.ts",
     "simular:implantacao": "FOCO_DB_URL=postgresql://postgres:postgres@127.0.0.1:56322/postgres deno run --env-file=piloto/hermes/.env --allow-net --allow-env --allow-read=. ferramentas/simular_implantacao.ts",
+    "simular:plataforma": "FOCO_DB_URL=postgresql://postgres:postgres@127.0.0.1:56322/postgres deno run --env-file=piloto/hermes/.env --allow-net --allow-env --allow-read=. ferramentas/simular_plataforma.ts",
     "agendar:local": "FOCO_DB_URL=postgresql://postgres:postgres@127.0.0.1:56322/postgres deno run --allow-net=127.0.0.1 --allow-env --allow-run=docker ferramentas/agendar_local.ts",
     "piloto:implantar": "FOCO_DB_URL=postgresql://postgres:postgres@127.0.0.1:56322/postgres deno run --allow-net=127.0.0.1 --allow-env --allow-read=. --allow-write=piloto/hermes piloto/implantar.ts criar",
     "piloto:aprovar": "FOCO_DB_URL=postgresql://postgres:postgres@127.0.0.1:56322/postgres deno run --allow-net=127.0.0.1 --allow-env --allow-read=. --allow-write=piloto/hermes piloto/implantar.ts aprovar"
