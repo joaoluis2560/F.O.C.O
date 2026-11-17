@@ -151,10 +151,32 @@ fatos, cinco orientações e duas perguntas marcadas como não aplicáveis, as q
 modelo barato, US$ 0,0034 no total. Depois da aprovação, o atendimento respondeu certo às
 mesmas quatro perguntas de cliente.
 
-Ainda não existe: o canal único da plataforma que recebe o dono e descobre a empresa pelo
-telefone. Hoje o canal de implantação é cadastrado por tenant, o que serve para simulação mas
-não para um número de WhatsApp compartilhado. A comparação de telefone é exata; números
-brasileiros que o WhatsApp entrega sem o nono dígito precisarão de tratamento.
+**Número único da plataforma.** Um canal de implantação marcado como `compartilhado` atende
+os donos de todas as empresas. Ele pertence ao tenant da plataforma, e a empresa de cada
+conversa é resolvida no servidor pelo telefone de quem escreve
+(`atendimento.empresas_do_implantador`):
+
+- Telefone sem cadastro: sem resposta e sem chamada de modelo.
+- Telefone de uma empresa: o agente opera só nela. Roteiro e propostas são dessa empresa.
+- Telefone em mais de uma empresa: mensagem fixa e transferência para uma pessoa, sem modelo.
+- Conversa, mensagens, custo e teto diário ficam no tenant da plataforma: a implantação é
+  custo nosso, e a empresa não precisa ter configuração de atendimento para ser entrevistada.
+
+```bash
+deno task piloto:implantar supermercado "Mercado Bom Preço"
+deno task piloto:implantar otica "Ótica Boa Vista"
+deno task simular:plataforma     # dois donos e um estranho no mesmo número
+```
+
+Verificado em 12/11/2026 com modelo real: cinco mensagens alternando ótica e mercado, cada
+resposta virou proposta só na empresa de quem escreveu (dois fatos em cada), o estranho ficou
+sem resposta, tudo no modelo barato, US$ 0,0040 no total, registrado na plataforma.
+
+Limites conhecidos: o teto diário da plataforma é um só para todas as entrevistas; o dono não
+lê a própria conversa de implantação (ela é do tenant da plataforma); a comparação de telefone
+é exata, e números brasileiros que o WhatsApp entrega sem o nono dígito precisarão de
+tratamento. Ainda não existe o cadastro pela página de entrada, que criará a empresa e o
+telefone autorizado.
 
 ```bash
 deno task credencial --tenant <uuid> --nome hermes --perfil equipe   # gera token e SQL do hash

@@ -30,6 +30,8 @@ export interface Canal {
 /** Canal como o worker o vê: inclui para que ele serve. */
 export interface CanalDoLote extends Canal {
   finalidade: "atendimento" | "implantacao";
+  /** Canal da plataforma: a empresa vem do telefone de quem escreve. */
+  compartilhado: boolean;
 }
 
 export interface Lote {
@@ -92,7 +94,8 @@ export function criarRepositorioAtendimento(url: string) {
 
     async canalDoLote(tenantId: string, canalId: string): Promise<CanalDoLote | null> {
       const [linha] = await sql<CanalDoLote[]>`
-        select id as canal_id, tenant_id, conta_externa, base_url, permite_http, finalidade
+        select id as canal_id, tenant_id, conta_externa, base_url, permite_http, finalidade,
+               compartilhado
         from atendimento.canais
         where id = ${canalId} and tenant_id = ${tenantId} and ativo`;
       return linha ?? null;
@@ -104,6 +107,17 @@ export function criarRepositorioAtendimento(url: string) {
       const [linha] = await sql<{ ok: boolean }[]>`
         select atendimento.pode_implantar(${tenantId}, ${contato}) as ok`;
       return linha.ok;
+    },
+
+    /**
+     * Empresas que este telefone pode implantar (no máximo duas: basta para
+     * saber se é nenhuma, uma ou mais de uma).
+     */
+    async empresasDoImplantador(contato: string | null): Promise<string[]> {
+      if (!contato) return [];
+      const linhas = await sql<{ tenant_id: string }[]>`
+        select tenant_id from atendimento.empresas_do_implantador(${contato})`;
+      return linhas.map((l) => l.tenant_id);
     },
 
     /** Falso quando a mensagem já tinha sido recebida. */

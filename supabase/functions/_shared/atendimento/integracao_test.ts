@@ -781,6 +781,127 @@ Deno.test({
         },
       );
 
+      // Canal único da plataforma: a empresa vem do telefone de quem escreve -----
+
+      const DONA_LOJA = "5511999990003";
+      const [plataforma] = await sql`
+        insert into nucleo.tenants (nome, slug) values ('Plataforma', ${`itest-at-plat-${sufixo}`})
+        returning id`;
+      const [loja] = await sql`
+        insert into nucleo.tenants (nome, slug, segmento)
+        values ('Loja', ${`itest-at-loja-${sufixo}`}, 'otica') returning id`;
+      await sql`
+        insert into atendimento.implantadores (tenant_id, telefone)
+        values (${loja.id}, ${DONA_LOJA})`;
+      // Só a plataforma tem configuração: a loja ainda nem começou a atender.
+      await sql`
+        insert into atendimento.config (tenant_id, modo, modelo_barato, modelo_forte)
+        values (${plataforma.id}, 'sombra', 'teste/barato', 'teste/forte')`;
+      const [cadastroPlat] = await sql`
+        insert into atendimento.canais
+          (tenant_id, tipo, nome, conta_externa, base_url, segredo_id, assinatura_segredo_id,
+           finalidade, compartilhado)
+        values (${plataforma.id}, 'chatwoot', 'plataforma', '9', 'https://chat.example',
+                ${seg_canal}, ${seg_canal}, 'implantacao', true)
+        returning id`;
+      const canalPlat = await repo.canalDoWebhook(cadastroPlat.id);
+      assert(canalPlat);
+      const chegaPlat = (conversa: string, contato: string | null, texto: string) =>
+        repo.receberMensagem(canalPlat, {
+          conversa_externa: conversa,
+          contato,
+          externa_id: `p${++n}`,
+          autor: "cliente",
+          texto,
+          anexos: 0,
+        });
+      const fatosDe = (id: string) =>
+        sql`select titulo, fonte from cerebro.fatos where tenant_id = ${id} and origem = 'agente'`;
+      const execucoesDe = (id: string) =>
+        sql`select nivel, motivo, resultado, custo_usd::float8 as custo
+            from atendimento.execucoes where tenant_id = ${id} order by id`;
+
+      await t.step("plataforma: a proposta vai para a empresa do telefone", async () => {
+        visto.length = 0;
+        canal.length = 0;
+        const antes = (await propostos()).length;
+        await chegaPlat("950", DONA_LOJA, "Os óculos ficam prontos em 7 dias úteis.");
+        fila.push(
+          chama("implantacao_pendencias", {}),
+          chama("cerebro_propor_fato", {
+            pergunta_id: "otica.prazo",
+            texto: "Óculos ficam prontos em 7 dias úteis.",
+          }),
+          fala("Anotado."),
+        );
+        const r = await processarProximoLote(deps);
+        assertEquals([r?.acao, r?.nivel, r?.sombra], ["responder", 1, false]);
+        assertEquals(canal, [{ tipo: "enviar", conversa: "950", texto: "Anotado." }]);
+        // O roteiro e a proposta são da loja; a plataforma e o outro tenant ficam intactos.
+        assert(visto[1].ultima.includes('"segmento":"otica"'));
+        const daLoja = await fatosDe(loja.id);
+        assertEquals(daLoja.map((f) => f.titulo), ["Prazo para os óculos ficarem prontos"]);
+        assertEquals((await fatosDe(plataforma.id)).length, 0);
+        assertEquals((await propostos()).length, antes);
+        // Conversa e custo ficam na plataforma, que é quem paga a implantação.
+        const custo = (await execucoesDe(plataforma.id)).reduce((s, e) => s + e.custo, 0);
+        assert(custo > 0);
+        assertEquals((await execucoesDe(loja.id)).length, 0);
+      });
+
+      await t.step("plataforma: telefone sem cadastro fica sem resposta", async () => {
+        visto.length = 0;
+        canal.length = 0;
+        await chegaPlat("951", "5511999990009", "Quero configurar minha loja.");
+        const r = await processarProximoLote(deps);
+        assertEquals([r?.acao, r?.motivo, r?.nivel], ["ignorar", "contato_nao_autorizado", 0]);
+        assertEquals([visto.length, canal.length], [0, 0]);
+      });
+
+      await t.step("plataforma: cada dono só alcança a própria empresa", async () => {
+        visto.length = 0;
+        const antesLoja = (await fatosDe(loja.id)).length;
+        const antes = (await propostos()).length;
+        // O dono do primeiro tenant escreve no mesmo número da plataforma.
+        await chegaPlat("952", DONO, "Aceitamos receita de até 1 ano.");
+        fila.push(
+          chama("cerebro_propor_fato", {
+            titulo: "Validade da receita",
+            texto: "Receita de até 1 ano.",
+          }),
+          fala("Anotado."),
+        );
+        await processarProximoLote(deps);
+        assertEquals((await propostos()).length, antes + 1);
+        assertEquals((await fatosDe(loja.id)).length, antesLoja);
+      });
+
+      await t.step(
+        "plataforma: telefone em duas empresas vai para uma pessoa, sem modelo",
+        async () => {
+          const [outra] = await sql`
+          insert into nucleo.tenants (nome, slug) values ('Outra', ${`itest-at-outra-${sufixo}`})
+          returning id`;
+          await sql`
+          insert into atendimento.implantadores (tenant_id, telefone)
+          values (${outra.id}, ${DONA_LOJA})`;
+          visto.length = 0;
+          canal.length = 0;
+          const antes = (await fatosDe(loja.id)).length;
+          await chegaPlat("953", DONA_LOJA, "Registre: lente de contato só com receita.");
+          const r = await processarProximoLote(deps);
+          assertEquals([r?.acao, r?.motivo, r?.nivel], [
+            "transferir",
+            "implantador_em_varias_empresas",
+            0,
+          ]);
+          assertEquals(visto.length, 0);
+          assertEquals(canal.map((c) => c.tipo), ["enviar", "nota", "transferir"]);
+          assertEquals((await fatosDe(loja.id)).length, antes);
+          assertEquals((await fatosDe(outra.id)).length, 0);
+        },
+      );
+
       await t.step("nada ficou preso na fila", async () => {
         const [{ presas }] = await sql`
           select count(*)::int as presas from atendimento.mensagens
@@ -790,7 +911,7 @@ Deno.test({
       });
     } finally {
       if (agendador?.active) await sql`select cron.alter_job(${agendador.jobid}, active := true)`;
-      await sql`delete from nucleo.tenants where slug = ${`itest-at-${sufixo}`}`;
+      await sql`delete from nucleo.tenants where slug like ${`itest-at-%${sufixo}`}`;
       await sql`delete from vault.secrets where name like ${`itest-at-%-${sufixo}`}`;
       await sql.end({ timeout: 2 });
       await repo.fechar();

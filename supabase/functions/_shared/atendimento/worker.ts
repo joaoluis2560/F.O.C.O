@@ -6,6 +6,10 @@
 // usa o perfil que registra propostas, e a resposta sempre vai para quem
 // escreveu (não existe modo sombra para falar com o dono).
 //
+// No canal compartilhado da plataforma a empresa não vem do canal: vem do
+// telefone de quem escreve. Conversa, custo e teto ficam no tenant dono do
+// canal; só as ferramentas do agente operam na empresa do dono.
+//
 // Garantias:
 //   * Só o worker que reivindicou o lote o renova, entrega e conclui. Antes de
 //     cada chamada de modelo e de cada etapa de entrega o prazo é renovado; se
@@ -61,6 +65,8 @@ export interface ResultadoLote {
 const LEASE_SEG = 180;
 
 const SO_TEXTO = "Por enquanto só consigo ler texto. Pode escrever sua resposta?";
+const VARIAS_EMPRESAS =
+  "Seu número está ligado a mais de uma empresa. Nossa equipe vai continuar a configuração com você por aqui.";
 
 const regra = (motivo: string, resultado: string): RegistroExecucao => ({
   nivel: 0,
@@ -280,11 +286,23 @@ export async function processarProximoLote(d: DependenciasWorker): Promise<Resul
       // Canal de implantação: antes de qualquer regra ou modelo, confere se quem
       // escreve é o telefone do cadastro. Qualquer outro fica sem resposta.
       let contato = lote.contato;
+      // Empresa em que o agente opera. Só difere do tenant do lote no canal compartilhado.
+      let empresa = tenant_id;
+      let variasEmpresas = false;
       if (implantacao) {
         const token = await d.repo.lerSegredoCanal(tenant_id, lote.canal_id);
         if (!token) throw new Error("canal inativo ou sem segredo");
         contato = await contatoDoLote(d, lote, cadastro, token);
-        if (!await d.repo.podeImplantar(tenant_id, contato)) {
+        let autorizado: boolean;
+        if (cadastro.compartilhado) {
+          const empresas = await d.repo.empresasDoImplantador(contato);
+          autorizado = empresas.length > 0;
+          variasEmpresas = empresas.length > 1;
+          if (empresas.length === 1) empresa = empresas[0];
+        } else {
+          autorizado = await d.repo.podeImplantar(tenant_id, contato);
+        }
+        if (!autorizado) {
           await d.repo.registrarExecucao(
             tenant_id,
             conversa_id,
@@ -322,7 +340,20 @@ export async function processarProximoLote(d: DependenciasWorker): Promise<Resul
       }
 
       let plano: { acao: "responder" | "transferir"; texto: string; motivo: string };
-      if (semModelo && implantacao && semModelo.motivo === "midia_nao_suportada") {
+      if (variasEmpresas) {
+        // Não dá para saber em qual empresa registrar: uma pessoa assume.
+        plano = {
+          acao: "transferir",
+          texto: VARIAS_EMPRESAS,
+          motivo: "implantador_em_varias_empresas",
+        };
+        await d.repo.registrarExecucao(
+          tenant_id,
+          conversa_id,
+          sombra,
+          regra(plano.motivo, "transferiu"),
+        );
+      } else if (semModelo && implantacao && semModelo.motivo === "midia_nao_suportada") {
         // O dono mandou áudio ou imagem: pedir texto resolve, não precisa de uma pessoa.
         plano = { acao: "responder", texto: SO_TEXTO, motivo: semModelo.motivo };
         await d.repo.registrarExecucao(
@@ -346,7 +377,7 @@ export async function processarProximoLote(d: DependenciasWorker): Promise<Resul
 
         const modelo = modeloControlado(d, lote, config);
         const papel = implantacao ? "implantacao" : "atendimento";
-        const cred: Credencial = { credencial_id: "agente", tenant_id, perfil: papel };
+        const cred: Credencial = { credencial_id: "agente", tenant_id: empresa, perfil: papel };
         const nucleo = { repo: d.nucleo, catalogo: d.catalogo };
         const contexto = await prepararContexto(d, modelo, lote, config, sombra);
         const desfecho = await atender({
